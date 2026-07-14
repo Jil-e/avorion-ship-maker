@@ -33,16 +33,18 @@ STYLE_KEYWORDS: dict[str, list[str]] = {
     "hazard":     ["hazard", "construction", "rescue", "аварийн", "спасательн"],
 }
 
-_SMALL = ["small", "tiny", "little", "compact", "маленьк", "малый", "малая", "компактн", "небольш"]
-_BIG = ["big", "large", "heavy", "большой", "большая", "крупн", "тяжёл", "тяжел"]
+# stems (substring match) so any word ending is caught: "больш" -> большой/ое/ая/ие/им...
+_SMALL = ["small", "tiny", "little", "compact", "маленьк", "небольш", "компактн", "малют", "крошечн"]
+_BIG = ["big", "large", "heavy", "больш", "крупн", "тяжёл", "тяжел"]
 _HUGE = ["huge", "massive", "giant", "enormous", "colossal", "огромн", "гигантск", "массивн", "колоссальн"]
 
-_LONG = ["long", "elongated", "needle", "sleek", "длинн", "вытянут", "игл"]
-_WIDE = ["wide", "broad", "fat", "широк", "широч"]
-_FLAT = ["flat", "thin", "плоск", "тонк"]
-_TALL = ["tall", "high", "высок"]
-_BOXY = ["boxy", "blocky", "rectangular", "brick", "угловат", "блочн", "прямоугольн", "кирпич"]
-_SMOOTH = ["smooth", "rounded", "curved", "streamlined", "обтекаем", "гладк", "округл", "плавн"]
+_LONG = ["long", "elongated", "needle", "длинн", "вытянут", "удлин", "игл", "иглоподобн"]
+_WIDE = ["wide", "broad", "широк", "широч", "пузат", "толст"]
+_NARROW = ["narrow", "slim", "узк", "тонк", "стройн", "худ"]
+_FLAT = ["flat", "плоск", "приплюснут", "низк", "лепёшк"]
+_TALL = ["tall", "высок", "башнеподобн"]
+_BOXY = ["boxy", "blocky", "rectangular", "brick", "угловат", "блочн", "прямоугольн", "кирпич", "коробч", "гранён"]
+_SMOOTH = ["smooth", "rounded", "curved", "streamlined", "обтекаем", "гладк", "округл", "плавн", "сглаж", "каплевидн"]
 
 _WORD_NUM = {"single": 1, "one": 1, "twin": 2, "dual": 2, "double": 2, "two": 2,
              "triple": 3, "three": 3, "quad": 4, "four": 4, "six": 6,
@@ -117,6 +119,8 @@ def parse_description(text: str) -> ShipSpec:
         L *= 1.3; W *= 0.85
     if _has(t, _WIDE):
         W *= 1.4
+    if _has(t, _NARROW):
+        W *= 0.65
     if _has(t, _FLAT):
         H *= 0.6
     if _has(t, _TALL):

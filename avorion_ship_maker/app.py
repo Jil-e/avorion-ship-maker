@@ -1,7 +1,8 @@
 """Gradio UI for the Avorion Ship Maker.
 
-Type a description (Russian or English), tweak the parameters, generate — see a
-3D preview and download an Avorion-ready ``.xml`` blueprint. Run with::
+Type a description (Russian or English), tweak parameters, and the ship updates
+live in an interactive WebGL preview (mouse orbit/zoom). Download an
+Avorion-ready ``.xml`` blueprint. Run with::
 
     python -m avorion_ship_maker.app
 """
@@ -13,12 +14,11 @@ import tempfile
 
 import gradio as gr
 
+from . import webgl
 from .blocks import BLOCK_NAMES, MATERIALS
 from .generator.builder import build_ship
 from .generator.spec import HULL_CLASSES, STYLES, ShipSpec
 from .generator.text_parser import parse_description
-from .preview import render_3d
-from .xml_io import save_xml
 
 AUTO = "auto"
 _EXPORT_DIR = os.path.join(tempfile.gettempdir(), "avorion_ship_maker")
@@ -76,6 +76,19 @@ def build_spec(description, hull_class, style, length, width, height,
     return spec
 
 
+def _understood_md(spec: ShipSpec) -> str:
+    """A short line showing what the description/controls resolved to."""
+    r = spec.resolved()
+    bits = [f"класс **{r.hull_class}**", f"стиль **{r.style}**",
+            f"размер **{r.length}×{r.width}×{r.height}**",
+            f"материал **{MATERIALS.get(r.material, r.material)}**",
+            f"двигателей **{r.engines}**"]
+    extras = [n for n, on in (("крылья", r.wings), ("кили", r.fins), ("мостик", r.bridge)) if on]
+    if extras:
+        bits.append(" + ".join(extras))
+    return "🔎 Понято: " + ", ".join(bits)
+
+
 def _stats_md(ship, spec) -> str:
     (lx, ly, lz), (hx, hy, hz) = ship.bounds()
     dx, dy, dz = round(hx - lx, 1), round(hy - ly, 1), round(hz - lz, 1)
@@ -84,20 +97,20 @@ def _stats_md(ship, spec) -> str:
         f"| {BLOCK_NAMES.get(idx, f'type {idx}')} | `{idx}` | {n} |"
         for idx, n in sorted(counts.items(), key=lambda kv: -kv[1])
     )
-    return (
-        f"### 🛰️ {spec.name}\n"
-        f"**Класс:** {spec.hull_class} · **Стиль:** {spec.style} · "
-        f"**Материал:** {MATERIALS.get(spec.material, spec.material)}\n\n"
-        f"**Блоков:** {len(ship)} · **Габариты (Д×Ш×В):** {dz} × {dx} × {dy}\n\n"
-        f"| Блок | index | шт. |\n|---|---|---|\n{rows}"
-    )
+    return (f"**Блоков:** {len(ship)} · **Габариты (Д×Ш×В):** {dz} × {dx} × {dy}\n\n"
+            f"| Блок | index | шт. |\n|---|---|---|\n{rows}")
+
+
+_PLACEHOLDER = ('<div style="height:520px;display:flex;align-items:center;justify-content:center;'
+                'color:#8b949e;background:#0d1117;border-radius:12px">Нажмите «Сгенерировать» '
+                'или измените параметр — здесь появится 3D-модель.</div>')
 
 
 def generate(description, hull_class, style, length, width, height,
              engines, wings, fins, bridge, boxiness, armor, detail,
              bevel, functional, material, block_size, scale, symmetry, seed,
-             use_colors, primary, secondary, accent, glow, elev, azim):
-    """Main handler: build the ship, render it, write the .xml."""
+             use_colors, primary, secondary, accent, glow):
+    """Main handler: build the ship, render WebGL preview, write the .xml."""
     try:
         spec = build_spec(description, hull_class, style, length, width, height,
                           engines, wings, fins, bridge, boxiness, armor, detail,
@@ -105,20 +118,15 @@ def generate(description, hull_class, style, length, width, height,
                           use_colors, primary, secondary, accent, glow)
         ship = build_ship(spec)
         if not ship.blocks:
-            raise ValueError("Сгенерирован пустой корпус — увеличьте размеры.")
-        fig = render_3d(ship, elev=elev, azim=azim)
-        path = os.path.join(_EXPORT_DIR, f"{_safe_name(spec.name)}.xml")
-        save_xml(ship, path)
-        return ship, fig, _stats_md(ship, spec), path, ""
-    except Exception as exc:  # surface the error in the UI instead of a stack trace
-        return None, None, "", None, f"⚠️ Ошибка: {exc}"
-
-
-def rerender(ship, elev, azim):
-    """Re-render the stored ship from a new camera angle (no regeneration)."""
-    if ship is None or not getattr(ship, "blocks", None):
-        return None
-    return render_3d(ship, elev=elev, azim=azim)
+            raise ValueError("Пустой корпус — увеличьте размеры.")
+        html = webgl.ship_to_iframe(ship)
+        base = os.path.join(_EXPORT_DIR, _safe_name(spec.name))
+        from .xml_io import save_xml
+        xml_path = save_xml(ship, base + ".xml")
+        html_path = webgl.save_html(ship, base + "_preview.html")
+        return html, _stats_md(ship, spec), xml_path, _understood_md(spec), "", html_path
+    except Exception as exc:
+        return _PLACEHOLDER, "", None, "", f"⚠️ Ошибка: {exc}", None
 
 
 EXAMPLES = [
@@ -136,20 +144,20 @@ def build_ui() -> gr.Blocks:
     mats = [AUTO] + [f"{k} {v}" for k, v in MATERIALS.items()]
 
     with gr.Blocks(title="Avorion Ship Maker") as demo:
-        state = gr.State(None)
         gr.Markdown(
             "# 🚀 Avorion Ship Maker\n"
-            "Опишите корабль словами (можно по-русски) и/или задайте параметры — "
-            "получите 3D-превью и готовый чертёж `.xml` для Avorion."
+            "Опишите корабль словами (можно по-русски) и/или крутите параметры — "
+            "модель обновляется **вживую**. Скачайте готовый чертёж `.xml` для Avorion."
         )
         with gr.Row():
             # ------------------------------------------------ controls
             with gr.Column(scale=5):
                 desc = gr.Textbox(
-                    label="Описание корабля",
+                    label="Описание корабля (Enter — применить)",
                     placeholder="напр.: большой военный крейсер, чёрный с оранжевым, 3 двигателя",
                     lines=2,
                 )
+                understood = gr.Markdown("")
                 with gr.Row():
                     hull_class = gr.Dropdown([AUTO] + list(HULL_CLASSES), value=AUTO, label="Класс корпуса")
                     style = gr.Dropdown([AUTO] + list(STYLES), value=AUTO, label="Стиль")
@@ -161,16 +169,14 @@ def build_ui() -> gr.Blocks:
                     with gr.Row():
                         block_size = gr.Slider(0.25, 4.0, 1.0, step=0.05, label="Шаг (размер блока)")
                         scale = gr.Slider(0.25, 5.0, 1.0, step=0.05, label="Масштаб")
-                with gr.Accordion("🔧 Форма и части", open=False):
+                with gr.Accordion("🔧 Форма, части, баланс", open=True):
+                    with gr.Row():
+                        bevel = gr.Slider(-1, 1, -1, step=0.05, label="Скос/клинья (0=кубы,1=гладко)")
+                        functional = gr.Slider(0, 1, 0.5, step=0.05, label="Функциональность (0=красота…1=начинка)")
                     with gr.Row():
                         boxiness = gr.Slider(-1, 1, -1, step=0.05, label="Угловатость (-1=авто)")
                         armor = gr.Slider(-1, 1, -1, step=0.05, label="Броня (-1=авто)")
                         detail = gr.Slider(-1, 1, -1, step=0.05, label="Детализация (-1=авто)")
-                    with gr.Row():
-                        bevel = gr.Slider(-1, 1, -1, step=0.05,
-                                          label="Скос рёбов/клинья (-1=авто, 0=кубы, 1=гладко)")
-                        functional = gr.Slider(0, 1, 0.5, step=0.05,
-                                               label="Функциональность (0=красота … 1=начинка)")
                     with gr.Row():
                         engines = gr.Slider(-1, 6, -1, step=1, label="Двигатели (-1=авто)")
                         wings = gr.Radio(yn, value=AUTO, label="Крылья")
@@ -187,27 +193,34 @@ def build_ui() -> gr.Blocks:
                 with gr.Row():
                     symmetry = gr.Checkbox(True, label="Симметрия")
                     seed = gr.Number(0, label="Seed", precision=0)
-                gen_btn = gr.Button("🛠️ Сгенерировать корабль", variant="primary", size="lg")
-                gr.Examples(EXAMPLES, inputs=[desc], label="Примеры")
+                gen_btn = gr.Button("🛠️ Сгенерировать / обновить", variant="primary", size="lg")
+                gr.Examples(EXAMPLES, inputs=[desc], label="Примеры (клик — подставить)")
 
             # ------------------------------------------------ output
             with gr.Column(scale=6):
                 err = gr.Markdown("")
-                plot = gr.Plot(label="3D-превью")
+                preview = gr.HTML(_PLACEHOLDER, label="3D-превью (WebGL)")
                 with gr.Row():
-                    elev = gr.Slider(-90, 90, 22, step=2, label="Наклон камеры")
-                    azim = gr.Slider(-180, 180, -58, step=2, label="Поворот камеры")
-                download = gr.File(label="Скачать чертёж (.xml)")
+                    download = gr.File(label="Скачать чертёж (.xml)")
+                    preview_file = gr.File(label="3D-превью .html (если 3D выше не видно — откройте в браузере)")
                 stats = gr.Markdown("")
 
         inputs = [desc, hull_class, style, length, width, height, engines, wings,
                   fins, bridge, boxiness, armor, detail, bevel, functional, material,
                   block_size, scale, symmetry, seed, use_colors, primary, secondary,
-                  accent, glow, elev, azim]
-        gen_btn.click(generate, inputs=inputs,
-                      outputs=[state, plot, stats, download, err])
-        for ctrl in (elev, azim):
-            ctrl.release(rerender, inputs=[state, elev, azim], outputs=[plot])
+                  accent, glow]
+        outputs = [preview, stats, download, understood, err, preview_file]
+
+        gen_btn.click(generate, inputs=inputs, outputs=outputs)
+        desc.submit(generate, inputs=inputs, outputs=outputs)
+        # live update: every control re-generates on change/release
+        for c in inputs:
+            if isinstance(c, gr.Slider):
+                c.release(generate, inputs=inputs, outputs=outputs)
+            elif isinstance(c, gr.Textbox):
+                pass  # handled by .submit above
+            else:  # Dropdown / Radio / Checkbox / ColorPicker / Number
+                c.change(generate, inputs=inputs, outputs=outputs)
     return demo
 
 
