@@ -279,29 +279,117 @@ def _hull_tops(g: VoxelGrid, xr, zr) -> dict[tuple[int, int], int]:
     return tops
 
 
+# wing archetypes, modelled on classic sci-fi silhouettes:
+#   swept   — planar swept-back wings, sometimes slight di-/anhedral (SC Sabre/Gladius)
+#   forward — forward-swept raider look
+#   delta   — wide triangular plates (Elite Cobra/Viper)
+#   gull    — steep inner section, flat past the knee (Mustang / Lambda shuttle)
+#   xfoil   — two angled blades per side, X from the front (X-wing / Buccaneer)
+#   tipfin  — swept wing ending in a vertical winglet (Gladius / Cutlass)
+#   tippod  — wing carrying an engine/weapon pod on the tip (Hornet / Firefly)
+_WING_KINDS = {"swept": 4, "forward": 2, "delta": 3, "gull": 3,
+               "xfoil": 2, "tipfin": 3, "tippod": 2}
+_WING_KINDS_UTILITY = {"swept": 4, "delta": 2, "tipfin": 2, "tippod": 3}
+
+
 def _add_wings(g: VoxelGrid, spec: ShipSpec, span: int, hull: tuple[int, int],
                rng: random.Random) -> None:
-    """Swept-back wings protruding from the flanks (grid is padded sideways)."""
+    """Wings protruding from the flanks; a per-seed archetype (see _WING_KINDS)."""
     if not spec.wings or span <= 0:
         return
     hX, hY = hull
     cy = (g.Y - 1) // 2
-    z0 = int(g.Z * (0.26 + 0.14 * rng.random()))
-    zl = max(3, int(g.Z * (0.20 + 0.12 * rng.random())))
-    sweep = 0.55 + 0.4 * rng.random()
-    thick = 1 if hY < 8 else 2
-    for k in range(z0, min(g.Z, z0 + zl)):
-        t = (k - z0) / max(zl - 1, 1)
-        ext = int(round(span * (1.0 - sweep * t)))   # long at the root, swept tip
-        if ext <= 0:
-            continue
-        for j in range(cy, cy + thick):
-            row = np.where(g.occ[:, j, k])[0]
-            if not len(row):
-                continue
-            lo, hi = int(row[0]), int(row[-1])
-            g.paint_box((lo - ext, lo - 1), (j, j), (k, k), R_WING, only_if_empty=True)
-            g.paint_box((hi + 1, hi + ext), (j, j), (k, k), R_WING, only_if_empty=True)
+    table = (_WING_KINDS_UTILITY
+             if spec.hull_class in ("freighter", "miner", "carrier", "station")
+             else _WING_KINDS)
+    kind = rng.choices(list(table), weights=list(table.values()))[0]
+
+    z0 = int(g.Z * (0.20 + 0.16 * rng.random()))       # root trailing edge
+    chord = max(4, int(g.Z * (0.22 + 0.18 * rng.random())))
+    sweep = (0.5 + 0.8 * rng.random()) * chord         # tip shift sternward
+    taper = 0.3 + 0.3 * rng.random()                   # tip chord / root chord
+    if kind == "forward":
+        sweep = -sweep * 0.8
+    elif kind == "delta":
+        chord = max(5, int(g.Z * (0.32 + 0.16 * rng.random())))
+        sweep, taper = chord * 0.15, 0.15
+
+    if kind == "xfoil":
+        a = 0.35 + 0.35 * rng.random()
+        blades = (a, -a)
+        span = max(3, int(span * 0.85))
+    elif kind == "gull":
+        blades = (rng.choice((-1, 1)) * (0.45 + 0.35 * rng.random()),)
+    else:                                              # mostly planar, slight tilt
+        blades = (rng.choice((-1, 0, 0, 1)) * 0.25 * rng.random(),)
+    knee = 0.35 + 0.25 * rng.random()                  # gull: kink along the span
+
+    # solid plane: adjacent columns must overlap well, so cap the sweep rate
+    sweep = float(np.clip(sweep, -span * 0.7, span * 0.7))
+
+    # snapshot the hull flank BEFORE painting (wings must not grow off themselves)
+    edges = {}
+    for k in range(g.Z):
+        row = np.where(g.occ[:, cy, k])[0]
+        if len(row):
+            edges[k] = (int(row[0]), int(row[-1]))
+    root_ks = [k for k in range(max(0, z0), min(g.Z, z0 + chord)) if k in edges]
+    if not root_ks:
+        return
+    # one straight root per side (outermost flank over the root chord)
+    rootL = min(edges[k][0] for k in root_ks)
+    rootR = max(edges[k][1] for k in root_ks)
+
+    thick_root = 1 if hY < 6 else (2 if hY < 14 else 3)
+    tips = []                                          # (dy, zs, ch) at the tip
+    for slope in blades:
+        prev_dy, prev_zs, prev_ch = 0, z0, chord
+        for s in range(span):
+            t = s / max(span - 1, 1)
+            ch = max(2, int(round(chord * (1 - (1 - taper) * t))))
+            zs = z0 - int(round(sweep * t))
+            # keep consecutive columns z-overlapping (face-connected)
+            zs = int(np.clip(zs, prev_zs - (ch - 1), prev_zs + prev_ch - 1))
+            if kind == "gull":
+                dy = int(round(slope * min(t, knee) * span))
+            else:
+                dy = int(round(slope * s))
+            ylo, yhi = min(dy, prev_dy), max(dy, prev_dy)
+            th = thick_root if t < 0.7 else 1
+            k0, k1 = max(0, zs), min(g.Z - 1, zs + ch - 1)
+            for side, root in ((-1, rootL), (1, rootR)):
+                x = root + side * (s + 1)
+                g.paint_box((x, x), (cy + ylo, cy + yhi + th - 1), (k0, k1),
+                            R_WING, only_if_empty=True)
+            prev_dy, prev_zs, prev_ch = dy, zs, ch
+        tips.append((prev_dy, prev_zs, prev_ch))
+
+    # root fairing: bridge any gap between the curved flank and the straight root
+    for k in root_ks:
+        eL, eR = edges[k]
+        if eL > rootL:
+            g.paint_box((rootL, eL - 1), (cy, cy + thick_root - 1), (k, k),
+                        R_WING, only_if_empty=True)
+        if eR < rootR:
+            g.paint_box((eR + 1, rootR), (cy, cy + thick_root - 1), (k, k),
+                        R_WING, only_if_empty=True)
+
+    # wingtip features
+    for dy, zs, ch in tips:
+        for side, root in ((-1, rootL), (1, rootR)):
+            x = root + side * span
+            if kind == "tipfin":                       # vertical winglet
+                fh = max(2, int(round(hY * 0.5)))
+                g.paint_box((x, x), (cy + dy - 1, cy + dy + fh),
+                            (max(0, zs), min(g.Z - 1, zs + max(2, ch))),
+                            R_FIN, only_if_empty=True)
+            elif kind == "tippod":                     # engine pod on the tip
+                xin = x - side                         # one voxel back toward hull
+                k0, k1 = max(0, zs - 2), min(g.Z - 1, zs + ch + 1)
+                g.paint_box((min(x, xin), max(x, xin)),
+                            (cy + dy - 1, cy + dy + 1), (k0, k1), R_ENGINE)
+                g.paint_box((min(x, xin), max(x, xin)),
+                            (cy + dy - 1, cy + dy + 1), (k0, k0), R_ENGINE_GLOW)
 
 
 def _add_fins(g: VoxelGrid, spec: ShipSpec, fin_h: int, hull: tuple[int, int],
@@ -491,11 +579,14 @@ def _bevel(g: VoxelGrid, spec: ShipSpec, table):
 
     for (i, j, k) in cand:
         codes = [c for c in _FACE_CODES if exposed[c][i, j, k]]
-        mi = min(int(i), X - 1 - int(i))
-        h = ((mi * 73856093) ^ (int(j) * 19349663) ^ (int(k) * 83492791)
-             ^ (int(spec.seed) * 2654435761)) & 0x7fffffff
-        if (h % 1000) / 1000.0 >= spec.bevel:
-            continue
+        # thin plates (wings/fins) chamfer deterministically along the whole
+        # edge — a stochastic bevel leaves them ragged
+        if g.role[i, j, k] not in (R_WING, R_FIN):
+            mi = min(int(i), X - 1 - int(i))
+            h = ((mi * 73856093) ^ (int(j) * 19349663) ^ (int(k) * 83492791)
+                 ^ (int(spec.seed) * 2654435761)) & 0x7fffffff
+            if (h % 1000) / 1000.0 >= spec.bevel:
+                continue
         if len(codes) == 2:
             d1, d2 = codes
             if orient.AXIS_OF[d1] == orient.AXIS_OF[d2]:
@@ -528,12 +619,17 @@ def build_ship(spec: ShipSpec) -> ShipModel:
     layout = _choose_layout(spec, _rng("layout"))
 
     # pad the grid so wings / fins / bridge / keel can protrude beyond the hull
-    wing_span = max(3, int(round(hX * (0.45 + 0.35 * _rng("wingspan").random()))))
+    combat = spec.hull_class not in ("freighter", "miner", "carrier", "station")
+    wing_scale = (0.7, 0.5) if combat else (0.5, 0.3)   # fighters: span ~ hull width
+    wing_span = max(5 if combat else 4, int(round(
+        hX * (wing_scale[0] + wing_scale[1] * _rng("wingspan").random()))))
     fin_h = max(2, int(round(hY * (0.40 + 0.35 * _rng("finh").random()))))
     cab_h = max(2, hY // 3)
     pad_x = wing_span if spec.wings else 0
+    # wings may tilt (di-/anhedral, x-foils) or end in winglets — reserve height
+    wing_pad_y = (int(round(wing_span * 0.8)) + max(2, hY // 2)) if spec.wings else 0
     pad_y = max(fin_h if spec.fins else 0, cab_h if spec.bridge else 0,
-                max(2, hY // 3) if layout == "keel" else 0)
+                max(2, hY // 3) if layout == "keel" else 0, wing_pad_y)
     X = hX + 2 * pad_x
     Y = hY + 2 * pad_y   # symmetric so the hull stays centred in the grid
     g = VoxelGrid(X, Y, Z)
