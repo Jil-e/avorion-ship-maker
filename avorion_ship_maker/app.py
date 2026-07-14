@@ -18,7 +18,7 @@ import gradio as gr
 from . import webgl
 from .blocks import BLOCK_NAMES, MATERIALS
 from .generator.builder import build_ship
-from .generator.spec import HULL_CLASSES, STYLES, ShipSpec
+from .generator.spec import HULL_CLASSES, LAYOUT_NAMES, LAYOUTS, STYLES, ShipSpec
 from .generator.text_parser import parse_description
 
 AUTO = "auto"
@@ -31,7 +31,7 @@ def _safe_name(name: str) -> str:
     return (slug or "ship")[:40]
 
 
-def build_spec(description, hull_class, style, length, width, height,
+def build_spec(description, hull_class, style, layout, length, width, height,
                engines, wings, fins, bridge, boxiness, armor, detail,
                bevel, functional, material, block_size, scale, symmetry, seed,
                use_colors, primary, secondary, accent, glow) -> ShipSpec:
@@ -42,6 +42,8 @@ def build_spec(description, hull_class, style, length, width, height,
         spec.hull_class = hull_class
     if style != AUTO:
         spec.style = style
+    if layout != AUTO:
+        spec.layout = layout
     if length and length > 0:
         spec.length = int(length)
     if width and width > 0:
@@ -84,6 +86,8 @@ def _understood_md(spec: ShipSpec) -> str:
             f"размер **{r.length}×{r.width}×{r.height}**",
             f"материал **{MATERIALS.get(r.material, r.material)}**",
             f"двигателей **{r.engines}**"]
+    if r.layout:
+        bits.insert(2, f"компоновка **{LAYOUT_NAMES.get(r.layout, r.layout)}**")
     extras = [n for n, on in (("крылья", r.wings), ("кили", r.fins), ("мостик", r.bridge)) if on]
     if extras:
         bits.append(" + ".join(extras))
@@ -98,7 +102,9 @@ def _stats_md(ship, spec) -> str:
         f"| {BLOCK_NAMES.get(idx, f'type {idx}')} | `{idx}` | {n} |"
         for idx, n in sorted(counts.items(), key=lambda kv: -kv[1])
     )
-    return (f"**Блоков:** {len(ship)} · **Габариты (Д×Ш×В):** {dz} × {dx} × {dy}\n\n"
+    lay = LAYOUT_NAMES.get(ship.layout, ship.layout or "—")
+    return (f"**Блоков:** {len(ship)} · **Компоновка:** {lay} · "
+            f"**Габариты (Д×Ш×В):** {dz} × {dx} × {dy}\n\n"
             f"| Блок | index | шт. |\n|---|---|---|\n{rows}")
 
 
@@ -107,13 +113,13 @@ _PLACEHOLDER = ('<div style="height:520px;display:flex;align-items:center;justif
                 'или измените параметр — здесь появится 3D-модель.</div>')
 
 
-def generate(description, hull_class, style, length, width, height,
+def generate(description, hull_class, style, layout, length, width, height,
              engines, wings, fins, bridge, boxiness, armor, detail,
              bevel, functional, material, block_size, scale, symmetry, seed,
              use_colors, primary, secondary, accent, glow):
     """Main handler: build the ship, render WebGL preview, write the .xml."""
     try:
-        spec = build_spec(description, hull_class, style, length, width, height,
+        spec = build_spec(description, hull_class, style, layout, length, width, height,
                           engines, wings, fins, bridge, boxiness, armor, detail,
                           bevel, functional, material, block_size, scale, symmetry, seed,
                           use_colors, primary, secondary, accent, glow)
@@ -130,7 +136,7 @@ def generate(description, hull_class, style, length, width, height,
         return _PLACEHOLDER, "", None, "", f"⚠️ Ошибка: {exc}", None
 
 
-_SEED_ARG = 19   # position of `seed` in the handler argument list
+_SEED_ARG = 20   # position of `seed` in the handler argument list
 
 
 def generate_variant(*vals):
@@ -147,6 +153,8 @@ EXAMPLES = [
     ["угловатый промышленный шахтёр из железа"],
     ["stealth destroyer, purple, no wings"],
     ["огромный линкор, синий с золотым, 4 двигателя"],
+    ["грузовой катамаран, жёлтый с чёрным"],
+    ["крейсер с гондолами, зелёный"],
 ]
 
 
@@ -173,6 +181,9 @@ def build_ui() -> gr.Blocks:
                 with gr.Row():
                     hull_class = gr.Dropdown([AUTO] + list(HULL_CLASSES), value=AUTO, label="Класс корпуса")
                     style = gr.Dropdown([AUTO] + list(STYLES), value=AUTO, label="Стиль")
+                    layout = gr.Dropdown(
+                        [("авто (от seed)", AUTO)] + [(LAYOUT_NAMES[l], l) for l in LAYOUTS],
+                        value=AUTO, label="Компоновка")
                 with gr.Accordion("📐 Размеры и масштаб", open=True):
                     with gr.Row():
                         length = gr.Slider(0, 120, 0, step=1, label="Длина (0=авто)")
@@ -217,7 +228,7 @@ def build_ui() -> gr.Blocks:
                     preview_file = gr.File(label="3D-превью .html (если 3D выше не видно — откройте в браузере)")
                 stats = gr.Markdown("")
 
-        inputs = [desc, hull_class, style, length, width, height, engines, wings,
+        inputs = [desc, hull_class, style, layout, length, width, height, engines, wings,
                   fins, bridge, boxiness, armor, detail, bevel, functional, material,
                   block_size, scale, symmetry, seed, use_colors, primary, secondary,
                   accent, glow]

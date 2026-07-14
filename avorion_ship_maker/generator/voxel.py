@@ -42,6 +42,31 @@ class VoxelGrid:
             self.occ[:, :, k] |= mask
             self.role[:, :, k][mask] = role
 
+    def fill_tube(self, cx, cy, hw, hh, p, role: int, z0: int = 0) -> None:
+        """Fill a superellipse tube slice by slice, starting at slice ``z0``.
+
+        All of ``cx, cy, hw, hh, p`` may be scalars or per-slice arrays; the
+        tube length is the longest array. Unlike :meth:`fill_profile` the
+        centre can move per slice, so offset hulls / nacelles / keels work.
+        """
+        args = [np.atleast_1d(np.asarray(a, float)) for a in (cx, cy, hw, hh, p)]
+        n = max(len(a) for a in args)
+        cx, cy, hw, hh, p = (np.broadcast_to(a, (n,)) for a in args)
+        ii = np.arange(self.X, dtype=float)
+        jj = np.arange(self.Y, dtype=float)
+        for idx in range(n):
+            k = z0 + idx
+            if k < 0 or k >= self.Z:
+                continue
+            w = max(float(hw[idx]), 0.001)
+            h = max(float(hh[idx]), 0.001)
+            pe = float(p[idx])
+            IX = (np.abs(ii - float(cx[idx]))[:, None] / w) ** pe
+            JY = (np.abs(jj - float(cy[idx]))[None, :] / h) ** pe
+            mask = IX + JY <= 1.0
+            self.occ[:, :, k] |= mask
+            self.role[:, :, k][mask] = role
+
     def paint_box(self, xr, yr, zr, role: int, only_if_empty: bool = False) -> None:
         """Set an inclusive voxel box ``[x0:x1, y0:y1, z0:z1]`` to ``role``.
 

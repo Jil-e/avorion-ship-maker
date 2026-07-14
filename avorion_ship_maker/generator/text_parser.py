@@ -24,6 +24,13 @@ CLASS_KEYWORDS: dict[str, list[str]] = {
     "station":    ["station", "outpost", "starbase", "станция", "база"],
 }
 
+LAYOUT_KEYWORDS: dict[str, list[str]] = {
+    "twin": ["катамаран", "двухкорпус", "catamaran", "twin hull", "twin-hull", "двойной корпус"],
+    "pods": ["гондол", "nacelle", "пилон"],
+    "keel": ["надстройк", "гребен", "гребн", "superstructure"],
+    "mono": ["монокорпус", "monohull", "один корпус"],
+}
+
 STYLE_KEYWORDS: dict[str, list[str]] = {
     "military":   ["military", "warship", "combat", "battle", "военн", "боев", "воен"],
     "civilian":   ["civilian", "passenger", "yacht", "гражданск", "пассажир", "яхта"],
@@ -77,6 +84,11 @@ def parse_description(text: str) -> ShipSpec:
     for st, keys in STYLE_KEYWORDS.items():
         if _has(t, [k.replace("ё", "е") for k in keys]):
             spec.style = st
+            break
+    # hull layout
+    for lay, keys in LAYOUT_KEYWORDS.items():
+        if _has(t, [k.replace("ё", "е") for k in keys]):
+            spec.layout = lay
             break
 
     # colours (first -> primary, second -> accent)

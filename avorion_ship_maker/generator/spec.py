@@ -37,6 +37,11 @@ STYLES: dict[str, dict] = {
 
 DEFAULT_STYLE = "military"
 
+# hull layout archetypes (None/auto => picked from the seed, weighted by class)
+LAYOUTS: tuple[str, ...] = ("mono", "twin", "pods", "keel")
+LAYOUT_NAMES = {"mono": "монокорпус", "twin": "катамаран",
+                "pods": "гондолы", "keel": "надстройка"}
+
 
 @dataclass
 class ShipSpec:
@@ -50,6 +55,7 @@ class ShipSpec:
     name: str = "Generated Ship"
     hull_class: str = DEFAULT_CLASS
     style: str = DEFAULT_STYLE
+    layout: str | None = None           # mono/twin/pods/keel; None => from seed
 
     # geometry (voxels) — None => take from hull_class preset
     length: int | None = None

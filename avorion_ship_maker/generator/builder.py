@@ -14,7 +14,7 @@ from .. import orient
 from ..blocks import Role, SHAPE_VARIANTS, index_for
 from ..model import Block, ShipModel
 from .palette import contrast, mix, shade, to_argb
-from .spec import ShipSpec
+from .spec import LAYOUTS, ShipSpec
 from .voxel import EMPTY, VoxelGrid, greedy_merge
 
 # ---- voxel role codes (internal) ---------------------------------------
@@ -23,65 +23,221 @@ from .voxel import EMPTY, VoxelGrid, greedy_merge
  R_BATTERY, R_INTEGRITY, R_SHIELD, R_DIRTHRUST) = range(18)
 
 
-def _profile(spec: ShipSpec, rng: random.Random):
-    """Per-slice half-width and half-height arrays (in voxels), stern -> bow.
+# ---- hull silhouette ----------------------------------------------------
 
-    The rng jitters nose/tail/bulge and adds a gentle waviness so every seed
-    yields a visibly different silhouette from the same spec.
+# bow shapes: (name, w_end, h_end, w_exp, h_exp) — how width/height die out
+_NOSE_KINDS = [
+    ("needle", 0.10, 0.32, 0.85, 1.20),   # classic sharp cone
+    ("chisel", 0.16, 0.80, 0.90, 1.60),   # narrows, keeps height (vertical blade)
+    ("shovel", 0.62, 0.16, 1.50, 0.80),   # flattens, keeps width (flat scoop)
+    ("blunt",  0.50, 0.55, 1.70, 1.70),   # short rounded ram
+]
+
+# layout -> weight, per hull class (picked from the seed when spec.layout is auto)
+_LAYOUT_WEIGHTS = {
+    "fighter":    (("mono", 5), ("pods", 3), ("twin", 2)),
+    "corvette":   (("mono", 5), ("pods", 3), ("twin", 2), ("keel", 1)),
+    "frigate":    (("mono", 4), ("pods", 3), ("keel", 2), ("twin", 1)),
+    "cruiser":    (("mono", 4), ("keel", 3), ("pods", 2), ("twin", 1)),
+    "battleship": (("mono", 4), ("keel", 4), ("pods", 1), ("twin", 1)),
+    "freighter":  (("mono", 4), ("twin", 3), ("keel", 2), ("pods", 1)),
+    "miner":      (("mono", 4), ("twin", 3), ("keel", 2), ("pods", 1)),
+    "carrier":    (("mono", 3), ("pods", 4), ("twin", 2), ("keel", 1)),
+    "station":    (("mono", 1),),
+}
+
+
+def _choose_layout(spec: ShipSpec, rng: random.Random) -> str:
+    if spec.layout in LAYOUTS:
+        return spec.layout
+    opts = _LAYOUT_WEIGHTS.get(spec.hull_class, _LAYOUT_WEIGHTS["frigate"])
+    return rng.choices([n for n, _ in opts], weights=[w for _, w in opts])[0]
+
+
+def _piecewise(vals, cuts, Z, hard, blend):
+    """Per-slice array from per-segment values; soft joints get a cosine blend,
+    hard joints stay as steps (terraced hulls)."""
+    raw = np.empty(Z)
+    edges = [0] + list(cuts) + [Z]
+    for i, v in enumerate(vals):
+        raw[edges[i]:edges[i + 1]] = v
+    for i, c in enumerate(cuts):
+        if hard[i]:
+            continue
+        lo, hi = max(0, c - blend), min(Z, c + blend)
+        if hi - lo < 2:
+            continue
+        s = (1 - np.cos(np.linspace(0, np.pi, hi - lo))) / 2
+        raw[lo:hi] = vals[i] * (1 - s) + vals[i + 1] * s
+    return raw
+
+
+def _hull_arrays(spec: ShipSpec, rng: random.Random):
+    """Per-slice half-width/height, vertical offset and superellipse exponent.
+
+    The hull is a chain of 2-5 random segments, each with its own cross-section
+    size, vertical offset and boxiness, joined by steps or blends, finished with
+    a randomly picked bow shape — so seeds give genuinely different silhouettes,
+    not one jittered tube.
     """
     Z = spec.length
     base_hw = max((spec.width - 1) / 2.0, 1.0)
     base_hh = max((spec.height - 1) / 2.0, 1.0)
-    nose = float(np.clip(spec.nose * (0.8 + 0.5 * rng.random()), 0.02, 0.9))
+    box = float(np.clip(spec.boxiness, 0, 1))
+
+    # longitudinal segments
+    nseg = int(np.clip(2 + Z // 16 + rng.randint(0, 1), 2, 5))
+    w = [0.5 + rng.random() for _ in range(nseg)]
+    cum = np.cumsum(w)
+    cuts = sorted({int(np.clip(Z * c / cum[-1], 2, Z - 3)) for c in cum[:-1]})
+    nseg = len(cuts) + 1
+    wm = [0.72 + 0.45 * rng.random() for _ in range(nseg)]
+    hm = [0.68 + 0.50 * rng.random() for _ in range(nseg)]
+    wm = [v / max(wm) for v in wm]          # widest segment uses the full width
+    hm = [v / max(hm) for v in hm]
+    yo = [(rng.random() - 0.45) * 0.30 * base_hh for _ in range(nseg)]
+    pd = [(rng.random() - 0.5) * 0.30 for _ in range(nseg)]
+    hard = [rng.random() < 0.25 + 0.55 * box for _ in cuts]  # boxy => terraces
+    blend = max(2, int(Z * (0.06 + 0.05 * rng.random())))
+
+    hw = base_hw * _piecewise(wm, cuts, Z, hard, blend)
+    hh = base_hh * _piecewise(hm, cuts, Z, hard, blend)
+    yoff = _piecewise(yo, cuts, Z, hard, blend)
+    pexp = 2.0 + np.clip(box + _piecewise(pd, cuts, Z, hard, blend), 0.05, 1.0) * 8.0
+
+    zc = np.arange(Z) / max(Z - 1, 1)        # 0 = stern, 1 = bow
+    # bow taper with a per-seed nose style (boxy hulls avoid needle noses)
+    kinds = _NOSE_KINDS if box < 0.75 else _NOSE_KINDS[1::2]
+    _, we, he, pw, ph = kinds[rng.randrange(len(kinds))]
+    nose = float(np.clip(spec.nose * (0.8 + 0.5 * rng.random()), 0.05, 0.9))
+    t = np.clip((zc - (1 - nose)) / nose, 0, 1)
+    hw = hw * (1.0 - (1.0 - we) * t ** pw)
+    hh = hh * (1.0 - (1.0 - he) * t ** ph)
+    # stern taper
     tail = float(np.clip(spec.taper_tail * (0.7 + 0.7 * rng.random()), 0.0, 0.5))
-    bulge = 0.04 + 0.06 * rng.random()
-    wamp = 0.05 * rng.random()
-    wfreq = rng.randint(2, 4)
-    wphase = rng.random() * 2 * np.pi
-    hw = np.empty(Z)
-    hh = np.empty(Z)
-    for k in range(Z):
-        zc = k / max(Z - 1, 1)               # 0 = stern, 1 = bow
-        ws = hs = 1.0
-        if zc < tail and tail > 0:            # gentle stern narrowing
-            t = zc / tail
-            ws = 0.82 + 0.18 * t
-            hs = 0.88 + 0.12 * t
-        if zc > 1 - nose:                     # bow taper (pointier in width)
-            t = (zc - (1 - nose)) / nose      # 0..1 into the nose
-            ws = 1.0 - (1.0 - 0.12) * (t ** 0.85)
-            hs = 1.0 - (1.0 - 0.35) * (t ** 1.2)
-        # mid-body bulge + low-frequency waviness (seed flavour)
-        ws *= (1.0 - bulge) + bulge * np.sin(np.pi * min(max(zc, 0), 1))
-        ws *= 1.0 + wamp * np.sin(wfreq * np.pi * zc + wphase)
-        hw[k] = base_hw * ws
-        hh[k] = base_hh * hs
-    return hw, hh
+    if tail > 0:
+        tt = np.clip(zc / tail, 0, 1)
+        hw = hw * (0.80 + 0.20 * tt)
+        hh = hh * (0.86 + 0.14 * tt)
+    # mid-body bulge + slight waviness
+    bulge = 0.03 + 0.05 * rng.random()
+    hw = hw * ((1 - bulge) + bulge * np.sin(np.pi * zc))
+    hw = hw * (1.0 + 0.04 * rng.random()
+               * np.sin(rng.randint(2, 4) * np.pi * zc + rng.random() * 6.28))
+    return hw, hh, yoff, pexp
+
+
+def _paint_hull(g: VoxelGrid, spec: ShipSpec, layout: str, rng: random.Random) -> None:
+    """Fill the hull occupancy for the chosen layout archetype."""
+    Z = g.Z
+    cx = (g.X - 1) / 2.0
+    cy = (g.Y - 1) / 2.0
+    base_hw = max((spec.width - 1) / 2.0, 1.0)
+    base_hh = max((spec.height - 1) / 2.0, 1.0)
+    hw, hh, yoff, pexp = _hull_arrays(spec, rng)
+
+    def ramp(n):
+        return (1 - np.cos(np.linspace(0, np.pi, max(n, 2)))) / 2
+
+    if layout == "twin":
+        sub = hw * 0.42
+        off = hw * 0.58
+        g.fill_tube(cx - off, cy + yoff, sub, hh * 0.9, pexp, R_HULL)
+        g.fill_tube(cx + off, cy + yoff, sub, hh * 0.9, pexp, R_HULL)
+        # central connector deck bridging the two hulls
+        z0 = int(Z * (0.28 + 0.08 * rng.random()))
+        z1 = min(Z - 1, int(Z * (0.62 + 0.12 * rng.random())))
+        sl = slice(z0, z1 + 1)
+        n = z1 + 1 - z0
+        e = np.minimum(np.minimum(ramp(n) * 3, ramp(n)[::-1] * 3), 1.0)
+        g.fill_tube(cx, cy + yoff[sl] + hh[sl] * 0.15,
+                    (off[sl] + sub[sl] * 0.6) * e,
+                    hh[sl] * 0.38 * (0.4 + 0.6 * e), 6.0, R_HULL, z0=z0)
+    elif layout == "pods":
+        g.fill_tube(cx, cy + yoff, hw * 0.74, hh, pexp, R_HULL)
+        # engine nacelles hugging the flanks, spindle-shaped
+        n_hw = max(1.0, base_hw * (0.15 + 0.05 * rng.random()))
+        z1 = min(Z - 1, int(Z * (0.45 + 0.25 * rng.random())))
+        n = z1 + 1
+        t = np.linspace(0, 1, n)
+        prof = np.clip(np.minimum(t * 6, (1 - t) * 3), 0, 1) ** 0.7
+        n_off = base_hw - n_hw
+        ncy = cy + (rng.random() - 0.6) * 0.3 * base_hh
+        g.fill_tube(cx - n_off, ncy, n_hw * prof, n_hw * 1.1 * prof, 2.4, R_HULL)
+        g.fill_tube(cx + n_off, ncy, n_hw * prof, n_hw * 1.1 * prof, 2.4, R_HULL)
+        # pylons tying the nacelles to the hull
+        for f in (0.30, 0.70):
+            k = int(z1 * f)
+            g.paint_box((int(cx - n_off), int(cx + n_off) + 1),
+                        (int(ncy), int(ncy) + 1),
+                        (k, k + max(1, Z // 30)), R_HULL, only_if_empty=True)
+    elif layout == "keel":
+        cym = cy + yoff - base_hh * 0.12
+        g.fill_tube(cx, cym, hw, hh * 0.78, pexp, R_HULL)
+        # dorsal superstructure straddling the hull top, sloped at both ends
+        z0 = int(Z * (0.12 + 0.08 * rng.random()))
+        z1 = min(Z - 1, int(Z * (0.60 + 0.18 * rng.random())))
+        sl = slice(z0, z1 + 1)
+        n = z1 + 1 - z0
+        r = ramp(n)
+        prof = np.minimum(np.minimum(r * 4, r[::-1] * 2.5), 1.0)
+        rv = base_hh * 0.30 * prof + 0.8
+        kcy = (cym[sl] + hh[sl] * 0.78) + 0.6 * rv   # bottom sinks 0.4*rv into hull
+        g.fill_tube(cx, kcy, hw[sl] * (0.30 + 0.10 * rng.random()),
+                    rv, 4.0, R_HULL, z0=z0)
+    else:  # mono
+        g.fill_tube(cx, cy + yoff, hw, hh, pexp, R_HULL)
+
+
+def _carve(g: VoxelGrid, xr, yr, zr, role: int) -> None:
+    """Recolour an existing (occupied) box region without adding volume."""
+    x0, x1 = g._clamp(xr, g.X)
+    y0, y1 = g._clamp(yr, g.Y)
+    z0, z1 = g._clamp(zr, g.Z)
+    if x0 > x1 or y0 > y1 or z0 > z1:
+        return
+    m = g.occ[x0:x1 + 1, y0:y1 + 1, z0:z1 + 1]
+    g.role[x0:x1 + 1, y0:y1 + 1, z0:z1 + 1][m] = role
 
 
 def _add_engines(g: VoxelGrid, spec: ShipSpec, hull: tuple[int, int],
                  rng: random.Random) -> None:
+    """Carve engine bays into the stern. Engines are distributed over the
+    occupied x-clusters there, so twin hulls / nacelles each get their own."""
     n = max(int(spec.engines), 0)
     if n == 0:
         return
     hX, hY = hull
     Z = g.Z
-    elen = max(2, int(round(Z * (0.11 + 0.06 * rng.random()))))
-    cx = (g.X - 1) / 2.0
-    cy = (g.Y - 1) / 2.0
-    # symmetric x-offsets for the pods, kept inside the hull footprint
-    if n == 1:
-        offsets = [0.0]
-    else:
-        spread = (hX - 1) / 2.0 * (0.55 + 0.2 * rng.random())
-        offsets = list(np.linspace(-spread, spread, n))
-    rad = max(1, int(round(hX / (max(n, 1) * 4))))
-    for off in offsets:
-        xc = int(round(cx + off))
-        yr = (int(cy - max(1, hY // 4)), int(cy + max(1, hY // 4)))
-        g.paint_box((xc - rad, xc + rad), yr, (0, elen), R_ENGINE)
-        # glowing exhaust face at the very stern
-        g.paint_box((xc - rad, xc + rad), yr, (0, 0), R_ENGINE_GLOW)
+    elen = max(2, int(round(Z * (0.10 + 0.06 * rng.random()))))
+    cy = (g.Y - 1) // 2
+    band = g.occ[:, max(0, cy - max(1, hY // 4)):cy + max(1, hY // 4) + 1, 1:3]
+    xs = np.where(band.any(axis=(1, 2)))[0]
+    if not len(xs):
+        return
+    runs, s, p = [], int(xs[0]), int(xs[0])
+    for x in xs[1:]:
+        if x == p + 1:
+            p = int(x)
+            continue
+        runs.append((s, p))
+        s = p = int(x)
+    runs.append((s, p))
+    widths = [b - a + 1 for a, b in runs]
+    total = sum(widths)
+    counts = ([max(1, round(n * w / total)) for w in widths]
+              if len(runs) > 1 else [n])
+    yr = (cy - max(1, hY // 4), cy + max(1, hY // 4))
+    for (a, b), cnt in zip(runs, counts):
+        w = b - a + 1
+        mid = (a + b) / 2.0
+        xcs = [mid] if cnt == 1 else list(np.linspace(mid - w * 0.33, mid + w * 0.33, cnt))
+        rad = max(1, int(round(w / (cnt * 4))))
+        for xc in xcs:
+            xi = int(round(xc))
+            _carve(g, (xi - rad, xi + rad), yr, (0, elen), R_ENGINE)
+            # glowing exhaust face at the very stern
+            _carve(g, (xi - rad, xi + rad), yr, (0, 0), R_ENGINE_GLOW)
 
 
 def _add_bridge(g: VoxelGrid, spec: ShipSpec, hull: tuple[int, int],
@@ -369,19 +525,20 @@ def build_ship(spec: ShipSpec) -> ShipModel:
     hX = max(3, int(spec.width))
     hY = max(3, int(spec.height))
     Z = max(4, int(spec.length))
+    layout = _choose_layout(spec, _rng("layout"))
 
-    # pad the grid so wings / fins / bridge can protrude beyond the hull
+    # pad the grid so wings / fins / bridge / keel can protrude beyond the hull
     wing_span = max(3, int(round(hX * (0.45 + 0.35 * _rng("wingspan").random()))))
     fin_h = max(2, int(round(hY * (0.40 + 0.35 * _rng("finh").random()))))
     cab_h = max(2, hY // 3)
     pad_x = wing_span if spec.wings else 0
-    pad_y = max(fin_h if spec.fins else 0, cab_h if spec.bridge else 0)
+    pad_y = max(fin_h if spec.fins else 0, cab_h if spec.bridge else 0,
+                max(2, hY // 3) if layout == "keel" else 0)
     X = hX + 2 * pad_x
     Y = hY + 2 * pad_y   # symmetric so the hull stays centred in the grid
     g = VoxelGrid(X, Y, Z)
 
-    hw, hh = _profile(spec, _rng("hull"))
-    g.fill_profile(hw, hh, spec.boxiness, R_HULL)
+    _paint_hull(g, spec, layout, _rng("hull"))
 
     _add_engines(g, spec, (hX, hY), _rng("engines"))
     _add_bridge(g, spec, (hX, hY), cab_h, _rng("bridge"))
@@ -398,6 +555,7 @@ def build_ship(spec: ShipSpec) -> ShipModel:
 
     s = spec.block_size * spec.scale
     ship = ShipModel(name=spec.name)
+    ship.layout = layout   # remembered for the UI stats line
 
     def emit(i0, i1, j0, j1, k0, k1, idx, color, mat, look, up):
         ship.add(Block(

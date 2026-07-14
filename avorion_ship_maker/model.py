@@ -97,6 +97,7 @@ class ShipModel:
 
     blocks: list[Block] = field(default_factory=list)
     name: str = "Ship"
+    layout: str | None = None   # hull archetype the builder used (mono/twin/...)
 
     def add(self, block: Block) -> Block:
         self.blocks.append(block)
