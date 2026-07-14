@@ -1,8 +1,8 @@
 """Gradio UI for the Avorion Ship Maker.
 
-Type a description (Russian or English), tweak parameters, and the ship updates
-live in an interactive WebGL preview (mouse orbit/zoom). Download an
-Avorion-ready ``.xml`` blueprint. Run with::
+Workflow (preview-first): describe the ship, press Enter / 🎲 to get a strip of
+variants, click one to open it in the big WebGL view, fine-tune with the
+controls on the right, download the Avorion-ready ``.xml``. Run with::
 
     python -m avorion_ship_maker.app
 """
@@ -20,10 +20,20 @@ from .blocks import BLOCK_NAMES, MATERIALS
 from .generator.builder import build_ship
 from .generator.spec import HULL_CLASSES, LAYOUT_NAMES, LAYOUTS, STYLES, ShipSpec
 from .generator.text_parser import parse_description
+from .preview import save_preview
 
 AUTO = "auto"
+N_VARIANTS = 6
 _EXPORT_DIR = os.path.join(tempfile.gettempdir(), "avorion_ship_maker")
 os.makedirs(_EXPORT_DIR, exist_ok=True)
+
+CLASS_NAMES = {"fighter": "истребитель", "corvette": "корвет", "frigate": "фрегат",
+               "cruiser": "крейсер", "battleship": "линкор", "freighter": "грузовоз",
+               "miner": "шахтёр", "carrier": "авианосец", "station": "станция"}
+STYLE_NAMES = {"military": "военный", "civilian": "гражданский", "stealth": "стелс",
+               "industrial": "промышленный", "sleek": "обтекаемый", "hazard": "аварийный"}
+MATERIAL_NAMES = {0: "железо", 1: "титан", 2: "наонит", 3: "триний",
+                  4: "ксанион", 5: "огонит", 6: "аворион"}
 
 
 def _safe_name(name: str) -> str:
@@ -54,7 +64,7 @@ def build_spec(description, hull_class, style, layout, length, width, height,
         spec.engines = int(engines)
     for val, attr in ((wings, "wings"), (fins, "fins"), (bridge, "bridge")):
         if val != AUTO:
-            setattr(spec, attr, val == "да / yes")
+            setattr(spec, attr, val == "yes")
     if boxiness is not None and boxiness >= 0:
         spec.boxiness = float(boxiness)
     if armor is not None and armor >= 0:
@@ -66,7 +76,7 @@ def build_spec(description, hull_class, style, layout, length, width, height,
     if functional is not None and functional >= 0:
         spec.functional = float(functional)
     if material != AUTO:
-        spec.material = int(material.split(" ")[0])
+        spec.material = int(material)
 
     spec.block_size = float(block_size)
     spec.scale = float(scale)
@@ -82,9 +92,10 @@ def build_spec(description, hull_class, style, layout, length, width, height,
 def _understood_md(spec: ShipSpec) -> str:
     """A short line showing what the description/controls resolved to."""
     r = spec.resolved()
-    bits = [f"класс **{r.hull_class}**", f"стиль **{r.style}**",
+    bits = [f"класс **{CLASS_NAMES.get(r.hull_class, r.hull_class)}**",
+            f"стиль **{STYLE_NAMES.get(r.style, r.style)}**",
             f"размер **{r.length}×{r.width}×{r.height}**",
-            f"материал **{MATERIALS.get(r.material, r.material)}**",
+            f"материал **{MATERIAL_NAMES.get(r.material, r.material)}**",
             f"двигателей **{r.engines}**"]
     if r.layout:
         bits.insert(2, f"компоновка **{LAYOUT_NAMES.get(r.layout, r.layout)}**")
@@ -108,9 +119,14 @@ def _stats_md(ship, spec) -> str:
             f"| Блок | index | шт. |\n|---|---|---|\n{rows}")
 
 
-_PLACEHOLDER = ('<div style="height:520px;display:flex;align-items:center;justify-content:center;'
-                'color:#8b949e;background:#0d1117;border-radius:12px">Нажмите «Сгенерировать» '
-                'или измените параметр — здесь появится 3D-модель.</div>')
+_PLACEHOLDER = (
+    '<div style="height:600px;display:flex;flex-direction:column;gap:10px;align-items:center;'
+    'justify-content:center;color:#93a0b4;background:#0d1117;border-radius:12px;'
+    'font-family:system-ui,sans-serif;text-align:center;padding:0 40px">'
+    '<div style="font-size:40px">🛠️</div>'
+    '<div style="font-size:15px;max-width:46ch">Опишите корабль справа и нажмите '
+    '<b style="color:#ff8a5c">Enter</b> — появятся варианты.<br>'
+    'Клик по варианту открывает его здесь, ползунки докручивают вживую.</div></div>')
 
 
 def generate(description, hull_class, style, layout, length, width, height,
@@ -126,7 +142,7 @@ def generate(description, hull_class, style, layout, length, width, height,
         ship = build_ship(spec)
         if not ship.blocks:
             raise ValueError("Пустой корпус — увеличьте размеры.")
-        html = webgl.ship_to_iframe(ship)
+        html = webgl.ship_to_iframe(ship, height=600)
         base = os.path.join(_EXPORT_DIR, _safe_name(spec.name))
         from .xml_io import save_xml
         xml_path = save_xml(ship, base + ".xml")
@@ -139,10 +155,38 @@ def generate(description, hull_class, style, layout, length, width, height,
 _SEED_ARG = 20   # position of `seed` in the handler argument list
 
 
-def generate_variant(*vals):
-    """Generate-button handler: roll a fresh seed so every click gives a new look."""
+def make_variants(*vals, progress=gr.Progress()):
+    """🎲 / Enter: build N variants with fresh seeds, open the first one."""
     vals = list(vals)
-    vals[_SEED_ARG] = random.randint(1, 999_999)
+    thumbs, seeds = [], []
+    for i in range(N_VARIANTS):
+        progress(i / N_VARIANTS, desc=f"Строю вариант {i + 1}/{N_VARIANTS}…")
+        vseed = random.randint(1, 999_999)
+        vals[_SEED_ARG] = vseed
+        try:
+            ship = build_ship(build_spec(*vals))
+            if not ship.blocks:
+                continue
+            png = os.path.join(_EXPORT_DIR, f"variant_{vseed}.png")
+            save_preview(ship, png, figsize=3.2)
+            thumbs.append((png, f"seed {vseed}"))
+            seeds.append(vseed)
+        except Exception:
+            continue
+    progress(1.0, desc="Открываю первый вариант…")
+    if not seeds:
+        return ([], [], _PLACEHOLDER, "", None, "",
+                "⚠️ Не удалось построить ни одного варианта — проверьте размеры.", None, vals[_SEED_ARG])
+    vals[_SEED_ARG] = seeds[0]
+    main = generate(*vals)
+    return (thumbs, seeds, *main, seeds[0])
+
+
+def pick_variant(evt: gr.SelectData, seeds, *vals):
+    """Click on a gallery thumbnail: open that variant in the main preview."""
+    vals = list(vals)
+    if seeds and evt.index is not None and int(evt.index) < len(seeds):
+        vals[_SEED_ARG] = int(seeds[int(evt.index)])
     return (*generate(*vals), vals[_SEED_ARG])
 
 
@@ -157,101 +201,163 @@ EXAMPLES = [
     ["крейсер с гондолами, зелёный"],
 ]
 
+_CSS = """
+.gradio-container { max-width: 1520px !important; margin: 0 auto; }
+#preview-col { position: sticky; top: 10px; align-self: flex-start; }
+#variants-gallery figure { border-radius: 8px; overflow: hidden; }
+footer { display: none !important; }
+/* deep-space palette (dark theme is forced on load) */
+.dark {
+  --body-background-fill: #080c12;
+  --background-fill-primary: #0e131b;
+  --background-fill-secondary: #141b26;
+  --block-background-fill: #0e131b;
+  --input-background-fill: #141b26;
+  --border-color-primary: #202a3a;
+  --block-border-color: #1b2331;
+  --body-text-color: #dde4ee;
+  --block-info-text-color: #93a0b4;
+  --color-accent: #ff5a2a;
+  /* labels are quiet text, not orange pills — orange is for actions only */
+  --block-title-background-fill: transparent;
+  --block-title-text-color: #c3cddc;
+  --block-label-background-fill: transparent;
+  --block-label-text-color: #93a0b4;
+  --checkbox-label-background-fill: transparent;
+  --checkbox-label-background-fill-hover: transparent;
+}
+"""
+
+# reload once with the dark theme (matches the space scene in the preview)
+_FORCE_DARK = """
+() => {
+  const u = new URL(window.location.href);
+  if (u.searchParams.get('__theme') !== 'dark') {
+    u.searchParams.set('__theme', 'dark');
+    window.location.replace(u.href);
+  }
+}
+"""
+
 
 def build_ui() -> gr.Blocks:
-    yn = [AUTO, "да / yes", "нет / no"]
-    mats = [AUTO] + [f"{k} {v}" for k, v in MATERIALS.items()]
+    yn = [("авто", AUTO), ("да", "yes"), ("нет", "no")]
+    cls_choices = [("авто", AUTO)] + [(CLASS_NAMES[k], k) for k in HULL_CLASSES]
+    style_choices = [("авто", AUTO)] + [(STYLE_NAMES[k], k) for k in STYLES]
+    layout_choices = [("авто", AUTO)] + [(LAYOUT_NAMES[k], k) for k in LAYOUTS]
+    mat_choices = [("авто", AUTO)] + \
+                  [(f"{MATERIAL_NAMES[k]} ({v})", str(k)) for k, v in MATERIALS.items()]
 
     with gr.Blocks(title="Avorion Ship Maker") as demo:
-        gr.Markdown(
-            "# 🚀 Avorion Ship Maker\n"
-            "Опишите корабль словами (можно по-русски) и/или крутите параметры — "
-            "модель обновляется **вживую**. Кнопка 🎲 каждый раз даёт **новый вариант** "
-            "(случайный seed). Скачайте готовый чертёж `.xml` для Avorion."
-        )
-        with gr.Row():
-            # ------------------------------------------------ controls
-            with gr.Column(scale=5):
-                desc = gr.Textbox(
-                    label="Описание корабля (Enter — применить)",
-                    placeholder="напр.: большой военный крейсер, чёрный с оранжевым, 3 двигателя",
-                    lines=2,
-                )
-                understood = gr.Markdown("")
+        seeds_state = gr.State([])
+
+        with gr.Row(equal_height=False):
+            # ---------------------------------------------- the ship (left)
+            with gr.Column(scale=8, elem_id="preview-col"):
+                err = gr.Markdown("")
+                preview = gr.HTML(_PLACEHOLDER)
+                variants_gal = gr.Gallery(
+                    label="Варианты — клик открывает в большом окне",
+                    columns=N_VARIANTS, rows=1, height=140,
+                    allow_preview=False, elem_id="variants-gallery")
                 with gr.Row():
-                    hull_class = gr.Dropdown([AUTO] + list(HULL_CLASSES), value=AUTO, label="Класс корпуса")
-                    style = gr.Dropdown([AUTO] + list(STYLES), value=AUTO, label="Стиль")
-                    layout = gr.Dropdown(
-                        [("авто (от seed)", AUTO)] + [(LAYOUT_NAMES[l], l) for l in LAYOUTS],
-                        value=AUTO, label="Компоновка")
-                with gr.Accordion("📐 Размеры и масштаб", open=True):
+                    download = gr.DownloadButton("⬇️ Скачать чертёж .xml", variant="primary")
+                    preview_file = gr.DownloadButton("🌐 3D-превью отдельным .html")
+                with gr.Accordion("📊 Состав корабля", open=False):
+                    stats = gr.Markdown("")
+
+            # ---------------------------------------------- controls (right)
+            with gr.Column(scale=4):
+                gr.Markdown("## 🚀 Avorion Ship Maker")
+                desc = gr.Textbox(
+                    label="Опишите корабль",
+                    placeholder="напр.: большой военный крейсер, чёрный с оранжевым",
+                    lines=2, info="Enter или 🎲 — новые варианты")
+                understood = gr.Markdown("")
+                variants_btn = gr.Button(f"🎲 {N_VARIANTS} новых вариантов",
+                                         variant="primary", size="lg")
+                with gr.Row():
+                    hull_class = gr.Dropdown(cls_choices, value=AUTO, label="Класс")
+                    style = gr.Dropdown(style_choices, value=AUTO, label="Стиль")
+                    layout = gr.Dropdown(layout_choices, value=AUTO, label="Компоновка")
+                bevel = gr.Slider(0, 1, 0.7, step=0.05, label="Скос граней",
+                                  info="0 — кубы · 1 — гладкий силуэт из клиньев")
+                functional = gr.Slider(0, 1, 0.5, step=0.05, label="Начинка",
+                                       info="0 — только внешний вид · 1 — максимум рабочих блоков")
+
+                with gr.Accordion("📐 Размеры и масштаб", open=False):
+                    length = gr.Slider(0, 120, 0, step=1, label="Длина, вокселей",
+                                       info="0 — авто по классу")
+                    width = gr.Slider(0, 60, 0, step=1, label="Ширина, вокселей",
+                                      info="0 — авто по классу")
+                    height = gr.Slider(-20, 20, 0, step=1, label="Высота, поправка",
+                                       info="0 — авто · −N ниже · +N выше")
                     with gr.Row():
-                        length = gr.Slider(0, 120, 0, step=1, label="Длина (0=авто)")
-                        width = gr.Slider(0, 60, 0, step=1, label="Ширина (0=авто)")
-                        height = gr.Slider(-20, 20, 0, step=1, label="Высота ±N (0=авто, −ниже, +выше)")
+                        block_size = gr.Slider(0.25, 4.0, 1.0, step=0.05, label="Шаг сетки",
+                                               info="размер одного блока в метрах игры")
+                        scale = gr.Slider(0.25, 5.0, 1.0, step=0.05, label="Масштаб",
+                                          info="умножает весь корабль целиком")
+
+                with gr.Accordion("🔧 Форма и части", open=False):
+                    boxiness = gr.Slider(-1, 1, -1, step=0.05, label="Сечение корпуса",
+                                         info="−1 — авто · 0 — обтекаемое · 1 — коробка")
+                    armor = gr.Slider(-1, 1, -1, step=0.05, label="Броня",
+                                      info="−1 — авто · доля бронированной обшивки")
+                    detail = gr.Slider(-1, 1, -1, step=0.05, label="Детализация",
+                                       info="−1 — авто · полосы свечения и акценты на обшивке")
+                    engines = gr.Slider(-1, 6, -1, step=1, label="Двигатели",
+                                        info="−1 — авто по классу")
                     with gr.Row():
-                        block_size = gr.Slider(0.25, 4.0, 1.0, step=0.05, label="Шаг (размер блока)")
-                        scale = gr.Slider(0.25, 5.0, 1.0, step=0.05, label="Масштаб")
-                with gr.Accordion("🔧 Форма, части, баланс", open=True):
-                    with gr.Row():
-                        bevel = gr.Slider(-1, 1, -1, step=0.05, label="Скос/клинья (0=кубы,1=гладко)")
-                        functional = gr.Slider(0, 1, 0.5, step=0.05, label="Функциональность (0=красота…1=начинка)")
-                    with gr.Row():
-                        boxiness = gr.Slider(-1, 1, -1, step=0.05, label="Угловатость (-1=авто)")
-                        armor = gr.Slider(-1, 1, -1, step=0.05, label="Броня (-1=авто)")
-                        detail = gr.Slider(-1, 1, -1, step=0.05, label="Детализация (-1=авто)")
-                    with gr.Row():
-                        engines = gr.Slider(-1, 6, -1, step=1, label="Двигатели (-1=авто)")
                         wings = gr.Radio(yn, value=AUTO, label="Крылья")
                         fins = gr.Radio(yn, value=AUTO, label="Кили")
                         bridge = gr.Radio(yn, value=AUTO, label="Мостик")
+
                 with gr.Accordion("🎨 Материал и цвета", open=False):
-                    material = gr.Dropdown(mats, value=AUTO, label="Материал")
-                    use_colors = gr.Checkbox(False, label="Переопределить цвета вручную")
+                    material = gr.Dropdown(mat_choices, value=AUTO, label="Материал",
+                                           info="тир блоков: железо — 1-й, аворион — 7-й")
+                    use_colors = gr.Checkbox(False, label="Задать цвета вручную (иначе — из стиля)")
                     with gr.Row():
                         primary = gr.ColorPicker("#4a4f52", label="Основной")
                         secondary = gr.ColorPicker("#2b2e30", label="Вторичный")
                         accent = gr.ColorPicker("#c0392b", label="Акцент")
                         glow = gr.ColorPicker("#ff5a2a", label="Свечение")
+
                 with gr.Row():
                     symmetry = gr.Checkbox(True, label="Симметрия")
-                    seed = gr.Number(0, label="Seed", precision=0)
-                gen_btn = gr.Button("🎲 Сгенерировать новый вариант", variant="primary", size="lg")
-                gr.Examples(EXAMPLES, inputs=[desc], label="Примеры (клик — подставить)")
-
-            # ------------------------------------------------ output
-            with gr.Column(scale=6):
-                err = gr.Markdown("")
-                preview = gr.HTML(_PLACEHOLDER, label="3D-превью (WebGL)")
-                with gr.Row():
-                    download = gr.File(label="Скачать чертёж (.xml)")
-                    preview_file = gr.File(label="3D-превью .html (если 3D выше не видно — откройте в браузере)")
-                stats = gr.Markdown("")
+                    seed = gr.Number(0, label="Seed", precision=0,
+                                     info="тот же seed — тот же корабль")
+                gr.Examples(EXAMPLES, inputs=[desc],
+                            label="Примеры (клик — подставить, Enter — сгенерировать)")
 
         inputs = [desc, hull_class, style, layout, length, width, height, engines, wings,
                   fins, bridge, boxiness, armor, detail, bevel, functional, material,
                   block_size, scale, symmetry, seed, use_colors, primary, secondary,
                   accent, glow]
         outputs = [preview, stats, download, understood, err, preview_file]
+        v_outputs = [variants_gal, seeds_state] + outputs + [seed]
 
-        # the button rolls a fresh seed -> a new variant on every click
-        gen_btn.click(generate_variant, inputs=inputs, outputs=outputs + [seed])
-        desc.submit(generate, inputs=inputs, outputs=outputs)
-        # live update: every control re-generates on user input
-        # (.input, not .change: writing the rolled seed back must not re-trigger)
+        # main cycle: Enter / 🎲 -> variants; click a thumbnail -> open it
+        variants_btn.click(make_variants, inputs=inputs, outputs=v_outputs)
+        desc.submit(make_variants, inputs=inputs, outputs=v_outputs)
+        variants_gal.select(pick_variant, inputs=[seeds_state] + inputs,
+                            outputs=outputs + [seed])
+        # fine-tuning: any control rebuilds the current ship live
+        # (.input, not .change: programmatic seed write-back must not re-trigger)
         for c in inputs:
             if isinstance(c, gr.Slider):
                 c.release(generate, inputs=inputs, outputs=outputs)
             elif isinstance(c, gr.Textbox):
-                pass  # handled by .submit above
-            else:  # Dropdown / Radio / Checkbox / ColorPicker / Number
+                pass  # Enter is handled by .submit above
+            else:
                 c.input(generate, inputs=inputs, outputs=outputs)
+        # a default ship right away, so the page never opens empty
+        demo.load(generate, inputs=inputs, outputs=outputs)
     return demo
 
 
 def main():
     demo = build_ui()
-    demo.launch(inbrowser=True,
+    demo.launch(inbrowser=True, css=_CSS, js=_FORCE_DARK,
                 theme=gr.themes.Soft(primary_hue="orange", neutral_hue="slate"))
 
 
