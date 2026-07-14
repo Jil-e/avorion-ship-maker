@@ -18,7 +18,8 @@ import gradio as gr
 from . import webgl
 from .blocks import BLOCK_NAMES, MATERIALS
 from .generator.builder import build_ship
-from .generator.spec import HULL_CLASSES, LAYOUT_NAMES, LAYOUTS, STYLES, ShipSpec
+from .generator.spec import (HULL_CLASSES, LAYOUT_NAMES, LAYOUTS, STYLES,
+                             WING_KINDS, ShipSpec)
 from .generator.text_parser import parse_description
 from .preview import save_preview
 
@@ -34,6 +35,9 @@ STYLE_NAMES = {"military": "военный", "civilian": "гражданский
                "industrial": "промышленный", "sleek": "обтекаемый", "hazard": "аварийный"}
 MATERIAL_NAMES = {0: "железо", 1: "титан", 2: "наонит", 3: "триний",
                   4: "ксанион", 5: "огонит", 6: "аворион"}
+WING_KIND_NAMES = {"swept": "стреловидные", "forward": "обратная стреловидность",
+                   "delta": "дельта", "gull": "«чайка»", "xfoil": "X-плоскости",
+                   "tipfin": "с винглетами", "tippod": "гондолы на концах"}
 
 
 def _safe_name(name: str) -> str:
@@ -42,7 +46,7 @@ def _safe_name(name: str) -> str:
 
 
 def build_spec(description, hull_class, style, layout, length, width, height,
-               engines, wings, fins, bridge, boxiness, armor, detail,
+               engines, wings, wing_kind, fins, bridge, boxiness, armor, detail,
                bevel, functional, material, block_size, scale, symmetry, seed,
                use_colors, primary, secondary, accent, glow) -> ShipSpec:
     """Compose a spec: description supplies defaults, UI controls override them."""
@@ -65,6 +69,10 @@ def build_spec(description, hull_class, style, layout, length, width, height,
     for val, attr in ((wings, "wings"), (fins, "fins"), (bridge, "bridge")):
         if val != AUTO:
             setattr(spec, attr, val == "yes")
+    if wing_kind != AUTO:
+        spec.wing_kind = wing_kind
+        if wings == AUTO:          # picking a wing style implies wings on
+            spec.wings = True
     if boxiness is not None and boxiness >= 0:
         spec.boxiness = float(boxiness)
     if armor is not None and armor >= 0:
@@ -130,13 +138,13 @@ _PLACEHOLDER = (
 
 
 def generate(description, hull_class, style, layout, length, width, height,
-             engines, wings, fins, bridge, boxiness, armor, detail,
+             engines, wings, wing_kind, fins, bridge, boxiness, armor, detail,
              bevel, functional, material, block_size, scale, symmetry, seed,
              use_colors, primary, secondary, accent, glow):
     """Main handler: build the ship, render WebGL preview, write the .xml."""
     try:
         spec = build_spec(description, hull_class, style, layout, length, width, height,
-                          engines, wings, fins, bridge, boxiness, armor, detail,
+                          engines, wings, wing_kind, fins, bridge, boxiness, armor, detail,
                           bevel, functional, material, block_size, scale, symmetry, seed,
                           use_colors, primary, secondary, accent, glow)
         ship = build_ship(spec)
@@ -152,7 +160,7 @@ def generate(description, hull_class, style, layout, length, width, height,
         return _PLACEHOLDER, "", None, "", f"⚠️ Ошибка: {exc}", None
 
 
-_SEED_ARG = 20   # position of `seed` in the handler argument list
+_SEED_ARG = 21   # position of `seed` in the handler argument list
 
 
 def make_variants(*vals, progress=gr.Progress()):
@@ -270,9 +278,9 @@ def build_ui() -> gr.Blocks:
             with gr.Column(scale=4):
                 gr.Markdown("## 🚀 Avorion Ship Maker")
                 desc = gr.Textbox(
-                    label="Опишите корабль",
+                    label="Опишите корабль (можно пропустить)",
                     placeholder="напр.: большой военный крейсер, чёрный с оранжевым",
-                    lines=2, info="Enter или 🎲 — новые варианты")
+                    lines=2, info="Enter или 🎲 — новые варианты. Или просто выберите класс ниже")
                 understood = gr.Markdown("")
                 variants_btn = gr.Button(f"🎲 {N_VARIANTS} новых вариантов",
                                          variant="primary", size="lg")
@@ -309,6 +317,11 @@ def build_ui() -> gr.Blocks:
                                         info="−1 — авто по классу")
                     with gr.Row():
                         wings = gr.Radio(yn, value=AUTO, label="Крылья")
+                        wing_kind = gr.Dropdown(
+                            [("авто — от seed", AUTO)] +
+                            [(WING_KIND_NAMES[k], k) for k in WING_KINDS],
+                            value=AUTO, label="Вид крыльев")
+                    with gr.Row():
                         fins = gr.Radio(yn, value=AUTO, label="Кили")
                         bridge = gr.Radio(yn, value=AUTO, label="Мостик")
 
@@ -330,20 +343,26 @@ def build_ui() -> gr.Blocks:
                             label="Примеры (клик — подставить, Enter — сгенерировать)")
 
         inputs = [desc, hull_class, style, layout, length, width, height, engines, wings,
-                  fins, bridge, boxiness, armor, detail, bevel, functional, material,
-                  block_size, scale, symmetry, seed, use_colors, primary, secondary,
-                  accent, glow]
+                  wing_kind, fins, bridge, boxiness, armor, detail, bevel, functional,
+                  material, block_size, scale, symmetry, seed, use_colors, primary,
+                  secondary, accent, glow]
         outputs = [preview, stats, download, understood, err, preview_file]
         v_outputs = [variants_gal, seeds_state] + outputs + [seed]
 
-        # main cycle: Enter / 🎲 -> variants; click a thumbnail -> open it
+        # main cycle: Enter / 🎲 -> variants; click a thumbnail -> open it.
+        # Identity controls (class/style/layout) are lazy mode: change one and
+        # a fresh batch of variants appears — no description needed.
         variants_btn.click(make_variants, inputs=inputs, outputs=v_outputs)
         desc.submit(make_variants, inputs=inputs, outputs=v_outputs)
+        for c in (hull_class, style, layout):
+            c.input(make_variants, inputs=inputs, outputs=v_outputs)
         variants_gal.select(pick_variant, inputs=[seeds_state] + inputs,
                             outputs=outputs + [seed])
-        # fine-tuning: any control rebuilds the current ship live
+        # fine-tuning: any other control rebuilds the current ship live
         # (.input, not .change: programmatic seed write-back must not re-trigger)
         for c in inputs:
+            if c in (hull_class, style, layout):
+                continue  # lazy mode above
             if isinstance(c, gr.Slider):
                 c.release(generate, inputs=inputs, outputs=outputs)
             elif isinstance(c, gr.Textbox):

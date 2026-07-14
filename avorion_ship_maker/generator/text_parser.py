@@ -28,7 +28,18 @@ LAYOUT_KEYWORDS: dict[str, list[str]] = {
     "twin": ["катамаран", "двухкорпус", "catamaran", "twin hull", "twin-hull", "двойной корпус"],
     "pods": ["гондол", "nacelle", "пилон"],
     "keel": ["надстройк", "гребен", "гребн", "superstructure"],
+    "hammer": ["молот", "hammerhead", "широкий нос", "т-обра"],
+    "fork": ["вилк", "раздвоен", "клешн", "forked", "prong"],
     "mono": ["монокорпус", "monohull", "один корпус"],
+}
+
+WING_KIND_KEYWORDS: dict[str, list[str]] = {
+    "forward": ["обратная стреловидн", "обратной стреловидн", "forward-swept", "forward swept"],
+    "delta": ["дельта", "delta"],
+    "gull": ["чайк", "gull"],
+    "xfoil": ["x-wing", "xfoil", "икс-крыл", "x-обра"],
+    "tipfin": ["винглет", "winglet"],
+    "tippod": ["гондолы на крыл", "на концах крыл"],
 }
 
 STYLE_KEYWORDS: dict[str, list[str]] = {
@@ -89,6 +100,12 @@ def parse_description(text: str) -> ShipSpec:
     for lay, keys in LAYOUT_KEYWORDS.items():
         if _has(t, [k.replace("ё", "е") for k in keys]):
             spec.layout = lay
+            break
+    # wing archetype (implies wings on)
+    for wk, keys in WING_KIND_KEYWORDS.items():
+        if _has(t, [k.replace("ё", "е") for k in keys]):
+            spec.wing_kind = wk
+            spec.wings = True
             break
 
     # colours (first -> primary, second -> accent)

@@ -35,14 +35,14 @@ _NOSE_KINDS = [
 
 # layout -> weight, per hull class (picked from the seed when spec.layout is auto)
 _LAYOUT_WEIGHTS = {
-    "fighter":    (("mono", 5), ("pods", 3), ("twin", 2)),
-    "corvette":   (("mono", 5), ("pods", 3), ("twin", 2), ("keel", 1)),
-    "frigate":    (("mono", 4), ("pods", 3), ("keel", 2), ("twin", 1)),
-    "cruiser":    (("mono", 4), ("keel", 3), ("pods", 2), ("twin", 1)),
-    "battleship": (("mono", 4), ("keel", 4), ("pods", 1), ("twin", 1)),
-    "freighter":  (("mono", 4), ("twin", 3), ("keel", 2), ("pods", 1)),
-    "miner":      (("mono", 4), ("twin", 3), ("keel", 2), ("pods", 1)),
-    "carrier":    (("mono", 3), ("pods", 4), ("twin", 2), ("keel", 1)),
+    "fighter":    (("mono", 4), ("pods", 3), ("twin", 2), ("fork", 3)),
+    "corvette":   (("mono", 4), ("pods", 3), ("twin", 2), ("keel", 1), ("fork", 2)),
+    "frigate":    (("mono", 3), ("pods", 3), ("keel", 2), ("twin", 1), ("fork", 2), ("hammer", 1)),
+    "cruiser":    (("mono", 3), ("keel", 3), ("pods", 2), ("twin", 1), ("hammer", 2), ("fork", 1)),
+    "battleship": (("mono", 3), ("keel", 4), ("pods", 1), ("twin", 1), ("hammer", 3)),
+    "freighter":  (("mono", 3), ("twin", 3), ("keel", 2), ("pods", 1), ("hammer", 2)),
+    "miner":      (("mono", 4), ("twin", 3), ("keel", 2), ("pods", 1), ("hammer", 1)),
+    "carrier":    (("mono", 2), ("pods", 4), ("twin", 2), ("keel", 1), ("hammer", 3)),
     "station":    (("mono", 1),),
 }
 
@@ -119,11 +119,10 @@ def _hull_arrays(spec: ShipSpec, rng: random.Random):
         tt = np.clip(zc / tail, 0, 1)
         hw = hw * (0.80 + 0.20 * tt)
         hh = hh * (0.86 + 0.14 * tt)
-    # mid-body bulge + slight waviness
+    # mid-body bulge (smooth; NO high-frequency waviness — at voxel resolution
+    # it rounds to lone one-voxel bumps that read as glitches)
     bulge = 0.03 + 0.05 * rng.random()
     hw = hw * ((1 - bulge) + bulge * np.sin(np.pi * zc))
-    hw = hw * (1.0 + 0.04 * rng.random()
-               * np.sin(rng.randint(2, 4) * np.pi * zc + rng.random() * 6.28))
     return hw, hh, yoff, pexp
 
 
@@ -135,6 +134,15 @@ def _paint_hull(g: VoxelGrid, spec: ShipSpec, layout: str, rng: random.Random) -
     base_hw = max((spec.width - 1) / 2.0, 1.0)
     base_hh = max((spec.height - 1) / 2.0, 1.0)
     hw, hh, yoff, pexp = _hull_arrays(spec, rng)
+
+    # most real ships are not vertically symmetric: flat-ish belly, shaped top
+    belly_f = (0.82 + 0.15 * rng.random()) if rng.random() < 0.6 else None
+
+    def belly(up_hh, p_arr):
+        """kwargs for fill_tube: a flatter, slightly shallower lower half."""
+        if belly_f is None:
+            return {}
+        return dict(hh_dn=up_hh * belly_f, p_dn=p_arr + 2.5)
 
     def ramp(n):
         return (1 - np.cos(np.linspace(0, np.pi, max(n, 2)))) / 2
@@ -171,9 +179,34 @@ def _paint_hull(g: VoxelGrid, spec: ShipSpec, layout: str, rng: random.Random) -
             g.paint_box((int(cx - n_off), int(cx + n_off) + 1),
                         (int(ncy), int(ncy) + 1),
                         (k, k + max(1, Z // 30)), R_HULL, only_if_empty=True)
+    elif layout == "hammer":
+        # slimmer body + a wide transverse bow section (Hammerhead style)
+        g.fill_tube(cx, cy + yoff, hw * 0.72, hh, pexp, R_HULL, **belly(hh, pexp))
+        z0h = int(Z * (0.72 + 0.08 * rng.random()))
+        z1h = min(Z - 1, int(Z * 0.96))
+        sl = slice(z0h, z1h + 1)
+        n = z1h + 1 - z0h
+        t = np.linspace(0.0, 1.0, max(n, 2))
+        cap = np.clip(np.minimum(t * 4, (1 - t) * 2.5), 0, 1) ** 0.5
+        head_w = base_hw * (0.9 + 0.1 * rng.random())
+        g.fill_tube(cx, cy + yoff[sl], head_w * (0.72 + 0.28 * cap),
+                    np.maximum(hh[sl] * 0.8, 1.2), 6.0, R_HULL, z0=z0h)
+    elif layout == "fork":
+        # blunt main body + two prongs converging toward the bow
+        zc = int(Z * (0.52 + 0.12 * rng.random()))
+        body = slice(0, zc + 1)
+        g.fill_tube(cx, cy + yoff[body], np.maximum(hw[body], base_hw * 0.55),
+                    hh[body], pexp[body], R_HULL, **belly(hh[body], pexp[body]))
+        sl = slice(max(0, zc - 2), Z)
+        p_hw = np.maximum(hw[sl] * 0.30, 1.0)
+        off = np.maximum(hw[sl] * 0.62, base_hw * 0.30)
+        p_hh = np.maximum(hh[sl] * 0.45, 1.0)
+        ncy = cy + yoff[sl]
+        g.fill_tube(cx - off, ncy, p_hw, p_hh, 2.6, R_HULL, z0=sl.start)
+        g.fill_tube(cx + off, ncy, p_hw, p_hh, 2.6, R_HULL, z0=sl.start)
     elif layout == "keel":
         cym = cy + yoff - base_hh * 0.12
-        g.fill_tube(cx, cym, hw, hh * 0.78, pexp, R_HULL)
+        g.fill_tube(cx, cym, hw, hh * 0.78, pexp, R_HULL, **belly(hh * 0.78, pexp))
         # dorsal superstructure straddling the hull top, sloped at both ends
         z0 = int(Z * (0.12 + 0.08 * rng.random()))
         z1 = min(Z - 1, int(Z * (0.60 + 0.18 * rng.random())))
@@ -186,7 +219,7 @@ def _paint_hull(g: VoxelGrid, spec: ShipSpec, layout: str, rng: random.Random) -
         g.fill_tube(cx, kcy, hw[sl] * (0.30 + 0.10 * rng.random()),
                     rv, 4.0, R_HULL, z0=z0)
     else:  # mono
-        g.fill_tube(cx, cy + yoff, hw, hh, pexp, R_HULL)
+        g.fill_tube(cx, cy + yoff, hw, hh, pexp, R_HULL, **belly(hh, pexp))
 
 
 def _carve(g: VoxelGrid, xr, yr, zr, role: int) -> None:
@@ -299,10 +332,13 @@ def _add_wings(g: VoxelGrid, spec: ShipSpec, span: int, hull: tuple[int, int],
         return
     hX, hY = hull
     cy = (g.Y - 1) // 2
-    table = (_WING_KINDS_UTILITY
-             if spec.hull_class in ("freighter", "miner", "carrier", "station")
-             else _WING_KINDS)
-    kind = rng.choices(list(table), weights=list(table.values()))[0]
+    if spec.wing_kind in _WING_KINDS:      # user forced a specific archetype
+        kind = spec.wing_kind
+    else:
+        table = (_WING_KINDS_UTILITY
+                 if spec.hull_class in ("freighter", "miner", "carrier", "station")
+                 else _WING_KINDS)
+        kind = rng.choices(list(table), weights=list(table.values()))[0]
 
     z0 = int(g.Z * (0.20 + 0.16 * rng.random()))       # root trailing edge
     chord = max(4, int(g.Z * (0.22 + 0.18 * rng.random())))
@@ -579,28 +615,37 @@ def _bevel(g: VoxelGrid, spec: ShipSpec, table):
 
     for (i, j, k) in cand:
         codes = [c for c in _FACE_CODES if exposed[c][i, j, k]]
-        # thin plates (wings/fins) chamfer deterministically along the whole
-        # edge — a stochastic bevel leaves them ragged
-        if g.role[i, j, k] not in (R_WING, R_FIN):
-            mi = min(int(i), X - 1 - int(i))
-            h = ((mi * 73856093) ^ (int(j) * 19349663) ^ (int(k) * 83492791)
-                 ^ (int(spec.seed) * 2654435761)) & 0x7fffffff
-            if (h % 1000) / 1000.0 >= spec.bevel:
-                continue
+        mi = min(int(i), X - 1 - int(i))
         if len(codes) == 2:
             d1, d2 = codes
             if orient.AXIS_OF[d1] == orient.AXIS_OF[d2]:
                 continue  # opposite faces (a slab), not a convex edge
+            # ONE decision per whole edge run, not per voxel: collapsing the
+            # run-axis coordinate keeps chamfers continuous (no lone teeth)
+            run_axis = ({0, 1, 2} - {orient.AXIS_OF[d1], orient.AXIS_OF[d2]}).pop()
+            key = [mi, int(j), int(k)]
+            key[run_axis] = -1
+            pair = min(d1, d2) * 7 + max(d1, d2)
             lk, u = orient.bevel_edge_orient(d1, d2)
-            kind[i, j, k] = 1
+            shape = 1
         else:  # 3 exposed faces
             if len({orient.AXIS_OF[c] for c in codes}) < 3:
                 continue
             lu = orient.bevel_corner_orient(*codes)
             if lu is None:
                 continue
+            key = [mi, int(j), int(k)]
+            pair = sum(codes) * 7
             lk, u = lu
-            kind[i, j, k] = 2
+            shape = 2
+        # thin plates (wings/fins) chamfer deterministically along the whole
+        # edge — a stochastic bevel leaves them ragged
+        if g.role[i, j, k] not in (R_WING, R_FIN):
+            h = ((key[0] * 73856093) ^ (key[1] * 19349663) ^ (key[2] * 83492791)
+                 ^ (pair * 0x9e3779b1) ^ (int(spec.seed) * 2654435761)) & 0x7fffffff
+            if (h % 1000) / 1000.0 >= spec.bevel:
+                continue
+        kind[i, j, k] = shape
         look[i, j, k], up[i, j, k] = lk, u
     return kind, look, up
 

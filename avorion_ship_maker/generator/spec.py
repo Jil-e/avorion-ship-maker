@@ -38,9 +38,14 @@ STYLES: dict[str, dict] = {
 DEFAULT_STYLE = "military"
 
 # hull layout archetypes (None/auto => picked from the seed, weighted by class)
-LAYOUTS: tuple[str, ...] = ("mono", "twin", "pods", "keel")
+LAYOUTS: tuple[str, ...] = ("mono", "twin", "pods", "keel", "hammer", "fork")
 LAYOUT_NAMES = {"mono": "монокорпус", "twin": "катамаран",
-                "pods": "гондолы", "keel": "надстройка"}
+                "pods": "гондолы", "keel": "надстройка",
+                "hammer": "молот (широкий нос)", "fork": "вилка (раздвоенный нос)"}
+
+# wing archetypes (None/auto => picked from the seed; see builder._WING_KINDS)
+WING_KINDS: tuple[str, ...] = ("swept", "forward", "delta", "gull",
+                               "xfoil", "tipfin", "tippod")
 
 
 @dataclass
@@ -74,6 +79,7 @@ class ShipSpec:
     # parts
     engines: int | None = None
     wings: bool | None = None
+    wing_kind: str | None = None        # one of WING_KINDS; None => from seed
     fins: bool | None = None
     bridge: bool | None = None
 

@@ -42,16 +42,24 @@ class VoxelGrid:
             self.occ[:, :, k] |= mask
             self.role[:, :, k][mask] = role
 
-    def fill_tube(self, cx, cy, hw, hh, p, role: int, z0: int = 0) -> None:
+    def fill_tube(self, cx, cy, hw, hh, p, role: int, z0: int = 0,
+                  hh_dn=None, p_dn=None) -> None:
         """Fill a superellipse tube slice by slice, starting at slice ``z0``.
 
         All of ``cx, cy, hw, hh, p`` may be scalars or per-slice arrays; the
         tube length is the longest array. Unlike :meth:`fill_profile` the
         centre can move per slice, so offset hulls / nacelles / keels work.
+        ``hh_dn``/``p_dn`` optionally give the BELOW-centreline half-height and
+        exponent, for vertically asymmetric hulls (flat belly, shaped dorsal).
         """
-        args = [np.atleast_1d(np.asarray(a, float)) for a in (cx, cy, hw, hh, p)]
+        if hh_dn is None:
+            hh_dn = hh
+        if p_dn is None:
+            p_dn = p
+        args = [np.atleast_1d(np.asarray(a, float))
+                for a in (cx, cy, hw, hh, p, hh_dn, p_dn)]
         n = max(len(a) for a in args)
-        cx, cy, hw, hh, p = (np.broadcast_to(a, (n,)) for a in args)
+        cx, cy, hw, hh, p, hh_dn, p_dn = (np.broadcast_to(a, (n,)) for a in args)
         ii = np.arange(self.X, dtype=float)
         jj = np.arange(self.Y, dtype=float)
         for idx in range(n):
@@ -59,11 +67,14 @@ class VoxelGrid:
             if k < 0 or k >= self.Z:
                 continue
             w = max(float(hw[idx]), 0.001)
-            h = max(float(hh[idx]), 0.001)
-            pe = float(p[idx])
-            IX = (np.abs(ii - float(cx[idx]))[:, None] / w) ** pe
-            JY = (np.abs(jj - float(cy[idx]))[None, :] / h) ** pe
-            mask = IX + JY <= 1.0
+            dy = jj - float(cy[idx])
+            up = dy >= 0
+            IX = np.abs(ii - float(cx[idx]))[:, None] / w
+            hu, pu = max(float(hh[idx]), 0.001), float(p[idx])
+            hd, pd = max(float(hh_dn[idx]), 0.001), float(p_dn[idx])
+            m_up = (IX ** pu + (np.abs(dy)[None, :] / hu) ** pu <= 1.0) & up[None, :]
+            m_dn = (IX ** pd + (np.abs(dy)[None, :] / hd) ** pd <= 1.0) & ~up[None, :]
+            mask = m_up | m_dn
             self.occ[:, :, k] |= mask
             self.role[:, :, k][mask] = role
 
