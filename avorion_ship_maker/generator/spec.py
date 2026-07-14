@@ -12,15 +12,15 @@ from dataclasses import dataclass, field, replace
 # hull_class -> geometric preset (grid dimensions in voxels + part defaults).
 # length = Z (fore/aft), width = X (full, port-starboard), height = Y (full).
 HULL_CLASSES: dict[str, dict] = {
-    "fighter":    dict(length=14, width=10, height=5,  engines=1, wings=True,  fins=True,  bridge=True,  boxiness=0.35, nose=0.45, taper_tail=0.15),
-    "corvette":   dict(length=22, width=10, height=7,  engines=2, wings=True,  fins=True,  bridge=True,  boxiness=0.5,  nose=0.4,  taper_tail=0.12),
-    "frigate":    dict(length=34, width=12, height=9,  engines=2, wings=True,  fins=False, bridge=True,  boxiness=0.6,  nose=0.38, taper_tail=0.1),
-    "cruiser":    dict(length=50, width=16, height=12, engines=3, wings=False, fins=True,  bridge=True,  boxiness=0.68, nose=0.32, taper_tail=0.1),
-    "battleship": dict(length=72, width=22, height=16, engines=4, wings=False, fins=True,  bridge=True,  boxiness=0.78, nose=0.28, taper_tail=0.08),
-    "freighter":  dict(length=46, width=18, height=16, engines=2, wings=False, fins=False, bridge=True,  boxiness=0.9,  nose=0.18, taper_tail=0.06),
-    "miner":      dict(length=30, width=14, height=12, engines=2, wings=False, fins=False, bridge=True,  boxiness=0.85, nose=0.22, taper_tail=0.08),
-    "carrier":    dict(length=64, width=24, height=14, engines=3, wings=True,  fins=False, bridge=True,  boxiness=0.82, nose=0.25, taper_tail=0.08),
-    "station":    dict(length=30, width=30, height=30, engines=0, wings=False, fins=False, bridge=False, boxiness=0.95, nose=0.05, taper_tail=0.05),
+    "fighter":    dict(length=20, width=14, height=7,  engines=1, wings=True,  fins=True,  bridge=True,  boxiness=0.35, nose=0.45, taper_tail=0.15),
+    "corvette":   dict(length=30, width=14, height=9,  engines=2, wings=True,  fins=True,  bridge=True,  boxiness=0.5,  nose=0.4,  taper_tail=0.12),
+    "frigate":    dict(length=46, width=16, height=12, engines=2, wings=True,  fins=False, bridge=True,  boxiness=0.6,  nose=0.38, taper_tail=0.1),
+    "cruiser":    dict(length=66, width=21, height=15, engines=3, wings=False, fins=True,  bridge=True,  boxiness=0.68, nose=0.32, taper_tail=0.1),
+    "battleship": dict(length=92, width=28, height=20, engines=4, wings=False, fins=True,  bridge=True,  boxiness=0.78, nose=0.28, taper_tail=0.08),
+    "freighter":  dict(length=60, width=23, height=20, engines=2, wings=False, fins=False, bridge=True,  boxiness=0.9,  nose=0.18, taper_tail=0.06),
+    "miner":      dict(length=40, width=18, height=15, engines=2, wings=False, fins=False, bridge=True,  boxiness=0.85, nose=0.22, taper_tail=0.08),
+    "carrier":    dict(length=82, width=31, height=18, engines=3, wings=True,  fins=False, bridge=True,  boxiness=0.82, nose=0.25, taper_tail=0.08),
+    "station":    dict(length=38, width=38, height=38, engines=0, wings=False, fins=False, bridge=False, boxiness=0.95, nose=0.05, taper_tail=0.05),
 }
 
 DEFAULT_CLASS = "frigate"

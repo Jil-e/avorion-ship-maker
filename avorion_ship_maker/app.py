@@ -282,8 +282,12 @@ def build_ui() -> gr.Blocks:
                     placeholder="напр.: большой военный крейсер, чёрный с оранжевым",
                     lines=2, info="Enter или 🎲 — новые варианты. Или просто выберите класс ниже")
                 understood = gr.Markdown("")
-                variants_btn = gr.Button(f"🎲 {N_VARIANTS} новых вариантов",
+                variants_btn = gr.Button(f"🎲 Подобрать {N_VARIANTS} вариантов",
                                          variant="primary", size="lg")
+                gr.Markdown(
+                    "<small>Класс, стиль, компоновка, крылья и двигатели тоже сразу "
+                    "подбирают варианты. Ползунки ниже докручивают уже выбранный "
+                    "корабль.</small>")
                 with gr.Row():
                     hull_class = gr.Dropdown(cls_choices, value=AUTO, label="Класс")
                     style = gr.Dropdown(style_choices, value=AUTO, label="Стиль")
@@ -350,18 +354,22 @@ def build_ui() -> gr.Blocks:
         v_outputs = [variants_gal, seeds_state] + outputs + [seed]
 
         # main cycle: Enter / 🎲 -> variants; click a thumbnail -> open it.
-        # Identity controls (class/style/layout) are lazy mode: change one and
-        # a fresh batch of variants appears — no description needed.
+        # Lazy mode: every "what ship do I want" control (class, style, layout,
+        # parts, module counts) rebuilds the batch of variants by itself.
+        wanted = (hull_class, style, layout, wing_kind, wings, fins, bridge, engines)
         variants_btn.click(make_variants, inputs=inputs, outputs=v_outputs)
         desc.submit(make_variants, inputs=inputs, outputs=v_outputs)
-        for c in (hull_class, style, layout):
-            c.input(make_variants, inputs=inputs, outputs=v_outputs)
+        for c in wanted:
+            if isinstance(c, gr.Slider):
+                c.release(make_variants, inputs=inputs, outputs=v_outputs)
+            else:
+                c.input(make_variants, inputs=inputs, outputs=v_outputs)
         variants_gal.select(pick_variant, inputs=[seeds_state] + inputs,
                             outputs=outputs + [seed])
-        # fine-tuning: any other control rebuilds the current ship live
+        # fine-tuning: the remaining controls rebuild the CURRENT ship live
         # (.input, not .change: programmatic seed write-back must not re-trigger)
         for c in inputs:
-            if c in (hull_class, style, layout):
+            if c in wanted:
                 continue  # lazy mode above
             if isinstance(c, gr.Slider):
                 c.release(generate, inputs=inputs, outputs=outputs)
