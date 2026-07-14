@@ -23,13 +23,21 @@ from .voxel import EMPTY, VoxelGrid, greedy_merge
  R_BATTERY, R_INTEGRITY, R_SHIELD, R_DIRTHRUST) = range(18)
 
 
-def _profile(spec: ShipSpec):
-    """Per-slice half-width and half-height arrays (in voxels), stern -> bow."""
+def _profile(spec: ShipSpec, rng: random.Random):
+    """Per-slice half-width and half-height arrays (in voxels), stern -> bow.
+
+    The rng jitters nose/tail/bulge and adds a gentle waviness so every seed
+    yields a visibly different silhouette from the same spec.
+    """
     Z = spec.length
     base_hw = max((spec.width - 1) / 2.0, 1.0)
     base_hh = max((spec.height - 1) / 2.0, 1.0)
-    nose = float(np.clip(spec.nose, 0.02, 0.9))
-    tail = float(np.clip(spec.taper_tail, 0.0, 0.5))
+    nose = float(np.clip(spec.nose * (0.8 + 0.5 * rng.random()), 0.02, 0.9))
+    tail = float(np.clip(spec.taper_tail * (0.7 + 0.7 * rng.random()), 0.0, 0.5))
+    bulge = 0.04 + 0.06 * rng.random()
+    wamp = 0.05 * rng.random()
+    wfreq = rng.randint(2, 4)
+    wphase = rng.random() * 2 * np.pi
     hw = np.empty(Z)
     hh = np.empty(Z)
     for k in range(Z):
@@ -41,76 +49,126 @@ def _profile(spec: ShipSpec):
             hs = 0.88 + 0.12 * t
         if zc > 1 - nose:                     # bow taper (pointier in width)
             t = (zc - (1 - nose)) / nose      # 0..1 into the nose
-            ws = float(np.interp(t, [0, 1], [1.0, 0.12]) ** 1.0)
             ws = 1.0 - (1.0 - 0.12) * (t ** 0.85)
             hs = 1.0 - (1.0 - 0.35) * (t ** 1.2)
-        # subtle mid-body bulge
-        ws *= 0.94 + 0.06 * np.sin(np.pi * min(max(zc, 0), 1))
+        # mid-body bulge + low-frequency waviness (seed flavour)
+        ws *= (1.0 - bulge) + bulge * np.sin(np.pi * min(max(zc, 0), 1))
+        ws *= 1.0 + wamp * np.sin(wfreq * np.pi * zc + wphase)
         hw[k] = base_hw * ws
         hh[k] = base_hh * hs
     return hw, hh
 
 
-def _add_engines(g: VoxelGrid, spec: ShipSpec, rng: random.Random) -> None:
+def _add_engines(g: VoxelGrid, spec: ShipSpec, hull: tuple[int, int],
+                 rng: random.Random) -> None:
     n = max(int(spec.engines), 0)
     if n == 0:
         return
+    hX, hY = hull
     Z = g.Z
-    elen = max(2, int(round(Z * 0.14)))
+    elen = max(2, int(round(Z * (0.11 + 0.06 * rng.random()))))
     cx = (g.X - 1) / 2.0
     cy = (g.Y - 1) / 2.0
-    # symmetric x-offsets for the pods
+    # symmetric x-offsets for the pods, kept inside the hull footprint
     if n == 1:
         offsets = [0.0]
     else:
-        spread = (g.X - 1) / 2.0 * 0.7
+        spread = (hX - 1) / 2.0 * (0.55 + 0.2 * rng.random())
         offsets = list(np.linspace(-spread, spread, n))
-    rad = max(1, int(round(g.X / (max(n, 1) * 4))) )
+    rad = max(1, int(round(hX / (max(n, 1) * 4))))
     for off in offsets:
         xc = int(round(cx + off))
-        yr = (int(cy - max(1, g.Y // 4)), int(cy + max(1, g.Y // 4)))
+        yr = (int(cy - max(1, hY // 4)), int(cy + max(1, hY // 4)))
         g.paint_box((xc - rad, xc + rad), yr, (0, elen), R_ENGINE)
         # glowing exhaust face at the very stern
         g.paint_box((xc - rad, xc + rad), yr, (0, 0), R_ENGINE_GLOW)
 
 
-def _add_bridge(g: VoxelGrid, spec: ShipSpec) -> None:
-    if not spec.bridge:
+def _add_bridge(g: VoxelGrid, spec: ShipSpec, hull: tuple[int, int],
+                cab_h: int, rng: random.Random) -> None:
+    """A raised cabin sitting on top of the hull (grid is padded above it)."""
+    if not spec.bridge or cab_h <= 0:
         return
-    cx = (g.X - 1) / 2.0
-    zc = int(g.Z * 0.62)
+    hX, hY = hull
+    cx = (g.X - 1) // 2
+    zc = int(g.Z * (0.55 + 0.10 * rng.random()))
     zl = max(2, int(g.Z * 0.12))
-    w = max(1, g.X // 6)
-    top = g.Y - 1
-    h = max(2, g.Y // 4)
-    g.paint_box((int(cx - w), int(cx + w)), (top - 1, top + h), (zc, zc + zl), R_BRIDGE)
-
-
-def _add_wings(g: VoxelGrid, spec: ShipSpec) -> None:
-    if not spec.wings:
+    w = max(1, hX // 6)
+    z1 = min(g.Z - 1, zc + zl - 1)
+    # flat roof: every column fills from its own hull top up to a common height
+    tops = _hull_tops(g, (cx - w, cx + w), (zc, z1))
+    if not tops:
         return
-    cy = int((g.Y - 1) / 2.0)
-    zc = int(g.Z * 0.42)
-    zl = max(3, int(g.Z * 0.22))
-    span = max(2, g.X // 3)
-    thick = 1 if g.Y < 8 else 2
-    # left + right, sweeping back toward the stern
-    g.paint_box((0 - span, g.X - 1 + span), (cy - thick, cy + thick), (zc, zc + zl), R_WING)
-    # clear wings that ended up outside the grid handled by clamp; taper the tip
-    g.paint_box((0 - span, 0 + 1), (cy - thick, cy), (max(0, zc - zl // 2), zc + 1), R_WING)
-    g.paint_box((g.X - 2, g.X - 1 + span), (cy - thick, cy), (max(0, zc - zl // 2), zc + 1), R_WING)
+    roof = min(tops.values()) + cab_h
+    for (x, k), top in tops.items():
+        if top + 1 <= roof:
+            g.paint_box((x, x), (top + 1, roof), (k, k), R_BRIDGE, only_if_empty=True)
+    # narrower, lower cockpit step in front (the bevel pass slopes it)
+    step = _hull_tops(g, (cx - max(1, w // 2), cx + max(1, w // 2)),
+                      (z1 + 1, min(g.Z - 1, z1 + max(1, zl // 2))))
+    roof2 = min(roof, (min(step.values()) if step else roof) + max(1, cab_h // 2))
+    for (x, k), top in step.items():
+        if top + 1 <= roof2:
+            g.paint_box((x, x), (top + 1, roof2), (k, k), R_BRIDGE, only_if_empty=True)
 
 
-def _add_fins(g: VoxelGrid, spec: ShipSpec) -> None:
-    if not spec.fins:
+def _hull_tops(g: VoxelGrid, xr, zr) -> dict[tuple[int, int], int]:
+    """Topmost occupied voxel per (x, z) column inside the given footprint."""
+    tops = {}
+    for k in range(max(0, int(zr[0])), min(g.Z, int(zr[1]) + 1)):
+        for x in range(max(0, int(xr[0])), min(g.X, int(xr[1]) + 1)):
+            col = np.where(g.occ[x, :, k])[0]
+            if len(col):
+                tops[(x, k)] = int(col[-1])
+    return tops
+
+
+def _add_wings(g: VoxelGrid, spec: ShipSpec, span: int, hull: tuple[int, int],
+               rng: random.Random) -> None:
+    """Swept-back wings protruding from the flanks (grid is padded sideways)."""
+    if not spec.wings or span <= 0:
         return
-    cx = (g.X - 1) / 2.0
-    top = g.Y - 1
-    zc = int(g.Z * 0.16)
-    zl = max(3, int(g.Z * 0.16))
-    w = max(1, g.X // 10)
-    fin_h = max(2, g.Y // 3)
-    g.paint_box((int(cx - w), int(cx + w)), (top, top + fin_h), (zc, zc + zl), R_FIN)
+    hX, hY = hull
+    cy = (g.Y - 1) // 2
+    z0 = int(g.Z * (0.26 + 0.14 * rng.random()))
+    zl = max(3, int(g.Z * (0.20 + 0.12 * rng.random())))
+    sweep = 0.55 + 0.4 * rng.random()
+    thick = 1 if hY < 8 else 2
+    for k in range(z0, min(g.Z, z0 + zl)):
+        t = (k - z0) / max(zl - 1, 1)
+        ext = int(round(span * (1.0 - sweep * t)))   # long at the root, swept tip
+        if ext <= 0:
+            continue
+        for j in range(cy, cy + thick):
+            row = np.where(g.occ[:, j, k])[0]
+            if not len(row):
+                continue
+            lo, hi = int(row[0]), int(row[-1])
+            g.paint_box((lo - ext, lo - 1), (j, j), (k, k), R_WING, only_if_empty=True)
+            g.paint_box((hi + 1, hi + ext), (j, j), (k, k), R_WING, only_if_empty=True)
+
+
+def _add_fins(g: VoxelGrid, spec: ShipSpec, fin_h: int, hull: tuple[int, int],
+              rng: random.Random) -> None:
+    """A dorsal tail fin: tall at the stern, sloping down toward the bow."""
+    if not spec.fins or fin_h <= 0:
+        return
+    hX, hY = hull
+    cx = (g.X - 1) // 2
+    z0 = int(g.Z * (0.06 + 0.06 * rng.random()))
+    zl = max(3, int(g.Z * (0.14 + 0.10 * rng.random())))
+    w = max(1, hX // 10)
+    for k in range(z0, min(g.Z, z0 + zl)):
+        t = (k - z0) / max(zl - 1, 1)
+        h = int(round(fin_h * (1.0 - 0.85 * t)))
+        if h <= 0:
+            continue
+        for x in range(cx - w + 1, cx + w):
+            col = np.where(g.occ[x, :, k])[0]
+            if not len(col):
+                continue
+            top = int(col[-1])
+            g.paint_box((x, x), (top + 1, top + h), (k, k), R_FIN, only_if_empty=True)
 
 
 def _enforce_symmetry(g: VoxelGrid) -> None:
@@ -137,7 +195,7 @@ def _resolve_roles(g: VoxelGrid, spec: ShipSpec, rng: random.Random) -> None:
     d = float(spec.detail)
     if d > 0.15:
         spacing = max(2, int(round(4 - 2.0 * d)))   # denser dashes at high detail
-        keep = (np.arange(g.Z) % spacing == 0)
+        keep = (np.arange(g.Z) % spacing == rng.randrange(spacing))
         # glow line along both flanks at mid height
         band = np.zeros_like(g.occ)
         band[:, cy, :] = True
@@ -303,23 +361,35 @@ def _bevel(g: VoxelGrid, spec: ShipSpec, table):
 def build_ship(spec: ShipSpec) -> ShipModel:
     """Build a complete ship from a spec."""
     spec = spec.resolved()
-    rng = random.Random(spec.seed)
 
-    X = max(3, int(spec.width))
-    Y = max(3, int(spec.height))
+    # one rng per subsystem, so toggling e.g. wings doesn't reshuffle the hull
+    def _rng(tag: str) -> random.Random:
+        return random.Random(f"{spec.seed}:{tag}")
+
+    hX = max(3, int(spec.width))
+    hY = max(3, int(spec.height))
     Z = max(4, int(spec.length))
+
+    # pad the grid so wings / fins / bridge can protrude beyond the hull
+    wing_span = max(3, int(round(hX * (0.45 + 0.35 * _rng("wingspan").random()))))
+    fin_h = max(2, int(round(hY * (0.40 + 0.35 * _rng("finh").random()))))
+    cab_h = max(2, hY // 3)
+    pad_x = wing_span if spec.wings else 0
+    pad_y = max(fin_h if spec.fins else 0, cab_h if spec.bridge else 0)
+    X = hX + 2 * pad_x
+    Y = hY + 2 * pad_y   # symmetric so the hull stays centred in the grid
     g = VoxelGrid(X, Y, Z)
 
-    hw, hh = _profile(spec)
+    hw, hh = _profile(spec, _rng("hull"))
     g.fill_profile(hw, hh, spec.boxiness, R_HULL)
 
-    _add_engines(g, spec, rng)
-    _add_bridge(g, spec)
-    _add_wings(g, spec)
-    _add_fins(g, spec)
+    _add_engines(g, spec, (hX, hY), _rng("engines"))
+    _add_bridge(g, spec, (hX, hY), cab_h, _rng("bridge"))
+    _add_wings(g, spec, wing_span, (hX, hY), _rng("wings"))
+    _add_fins(g, spec, fin_h, (hX, hY), _rng("fins"))
 
     _enforce_symmetry(g)
-    _resolve_roles(g, spec, rng)
+    _resolve_roles(g, spec, _rng("detail"))
     _functional(g, spec)
     _enforce_symmetry(g)  # keep glow/tech placement symmetric too
 

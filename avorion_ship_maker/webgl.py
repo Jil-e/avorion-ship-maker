@@ -22,7 +22,8 @@ _CUBE_FACES = [
 
 def _rgb(color: str):
     c = color[-6:] if len(color) >= 6 else "808080"
-    return [int(c[i:i + 2], 16) / 255.0 for i in (0, 2, 4)]
+    # sRGB -> linear: three.js expects linear vertex colours with sRGB output
+    return [(int(c[i:i + 2], 16) / 255.0) ** 2.2 for i in (0, 2, 4)]
 
 
 def _cube_faces(b):
@@ -119,7 +120,8 @@ try {
   g.setAttribute('position', new THREE.Float32BufferAttribute(D.pos, 3));
   g.setAttribute('normal',   new THREE.Float32BufferAttribute(D.nrm, 3));
   g.setAttribute('color',    new THREE.Float32BufferAttribute(D.col, 3));
-  const mat = new THREE.MeshStandardMaterial({vertexColors:true, metalness:0.15, roughness:0.72, flatShading:true});
+  const mat = new THREE.MeshStandardMaterial({vertexColors:true, metalness:0.15, roughness:0.72,
+    flatShading:true, side:THREE.DoubleSide});
   scene.add(new THREE.Mesh(g, mat));
   scene.add(new THREE.HemisphereLight(0xffffff, 0x223044, 0.75));
   const key = new THREE.DirectionalLight(0xffffff, 1.15); key.position.set(1,1.6,1.2); scene.add(key);

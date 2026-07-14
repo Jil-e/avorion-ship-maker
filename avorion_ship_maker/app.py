@@ -9,6 +9,7 @@ Avorion-ready ``.xml`` blueprint. Run with::
 from __future__ import annotations
 
 import os
+import random
 import re
 import tempfile
 
@@ -45,8 +46,8 @@ def build_spec(description, hull_class, style, length, width, height,
         spec.length = int(length)
     if width and width > 0:
         spec.width = int(width)
-    if height and height > 0:
-        spec.height = int(height)
+    if height:  # relative: 0 = auto, +N taller, -N flatter
+        spec.height = max(3, int(spec.height) + int(height))
     if engines is not None and engines >= 0:
         spec.engines = int(engines)
     for val, attr in ((wings, "wings"), (fins, "fins"), (bridge, "bridge")):
@@ -129,6 +130,16 @@ def generate(description, hull_class, style, length, width, height,
         return _PLACEHOLDER, "", None, "", f"⚠️ Ошибка: {exc}", None
 
 
+_SEED_ARG = 19   # position of `seed` in the handler argument list
+
+
+def generate_variant(*vals):
+    """Generate-button handler: roll a fresh seed so every click gives a new look."""
+    vals = list(vals)
+    vals[_SEED_ARG] = random.randint(1, 999_999)
+    return (*generate(*vals), vals[_SEED_ARG])
+
+
 EXAMPLES = [
     ["маленький красный истребитель с крыльями"],
     ["большой военный крейсер, чёрный с оранжевым, 3 двигателя"],
@@ -147,7 +158,8 @@ def build_ui() -> gr.Blocks:
         gr.Markdown(
             "# 🚀 Avorion Ship Maker\n"
             "Опишите корабль словами (можно по-русски) и/или крутите параметры — "
-            "модель обновляется **вживую**. Скачайте готовый чертёж `.xml` для Avorion."
+            "модель обновляется **вживую**. Кнопка 🎲 каждый раз даёт **новый вариант** "
+            "(случайный seed). Скачайте готовый чертёж `.xml` для Avorion."
         )
         with gr.Row():
             # ------------------------------------------------ controls
@@ -165,7 +177,7 @@ def build_ui() -> gr.Blocks:
                     with gr.Row():
                         length = gr.Slider(0, 120, 0, step=1, label="Длина (0=авто)")
                         width = gr.Slider(0, 60, 0, step=1, label="Ширина (0=авто)")
-                        height = gr.Slider(0, 60, 0, step=1, label="Высота (0=авто)")
+                        height = gr.Slider(-20, 20, 0, step=1, label="Высота ±N (0=авто, −ниже, +выше)")
                     with gr.Row():
                         block_size = gr.Slider(0.25, 4.0, 1.0, step=0.05, label="Шаг (размер блока)")
                         scale = gr.Slider(0.25, 5.0, 1.0, step=0.05, label="Масштаб")
@@ -193,7 +205,7 @@ def build_ui() -> gr.Blocks:
                 with gr.Row():
                     symmetry = gr.Checkbox(True, label="Симметрия")
                     seed = gr.Number(0, label="Seed", precision=0)
-                gen_btn = gr.Button("🛠️ Сгенерировать / обновить", variant="primary", size="lg")
+                gen_btn = gr.Button("🎲 Сгенерировать новый вариант", variant="primary", size="lg")
                 gr.Examples(EXAMPLES, inputs=[desc], label="Примеры (клик — подставить)")
 
             # ------------------------------------------------ output
@@ -211,16 +223,18 @@ def build_ui() -> gr.Blocks:
                   accent, glow]
         outputs = [preview, stats, download, understood, err, preview_file]
 
-        gen_btn.click(generate, inputs=inputs, outputs=outputs)
+        # the button rolls a fresh seed -> a new variant on every click
+        gen_btn.click(generate_variant, inputs=inputs, outputs=outputs + [seed])
         desc.submit(generate, inputs=inputs, outputs=outputs)
-        # live update: every control re-generates on change/release
+        # live update: every control re-generates on user input
+        # (.input, not .change: writing the rolled seed back must not re-trigger)
         for c in inputs:
             if isinstance(c, gr.Slider):
                 c.release(generate, inputs=inputs, outputs=outputs)
             elif isinstance(c, gr.Textbox):
                 pass  # handled by .submit above
             else:  # Dropdown / Radio / Checkbox / ColorPicker / Number
-                c.change(generate, inputs=inputs, outputs=outputs)
+                c.input(generate, inputs=inputs, outputs=outputs)
     return demo
 
 
