@@ -27,12 +27,12 @@ DEFAULT_CLASS = "frigate"
 
 # style -> aesthetic preset (colours + armour density + detail).
 STYLES: dict[str, dict] = {
-    "military":   dict(primary="4a4f52", secondary="2b2e30", accent="c0392b", glow="ff5a2a", armor=0.7, detail=0.6, material=1),
-    "civilian":   dict(primary="d8dde0", secondary="9aa0a4", accent="2e86c1", glow="7fd8ff", armor=0.35, detail=0.5, material=1),
-    "stealth":    dict(primary="1a1c1e", secondary="0d0e10", accent="6c3483", glow="9b59b6", armor=0.8, detail=0.4, material=1),
-    "industrial": dict(primary="6e5b3a", secondary="3d3527", accent="e39a1c", glow="ffb020", armor=0.55, detail=0.7, material=0),
-    "sleek":      dict(primary="ecf0f1", secondary="34495e", accent="1abc9c", glow="6ff3d6", armor=0.4, detail=0.55, material=3),
-    "hazard":     dict(primary="e0c020", secondary="1c1c1c", accent="e0c020", glow="fff040", armor=0.6, detail=0.65, material=1),
+    "military":   dict(primary="4a4f52", secondary="2b2e30", accent="c0392b", glow="ff5a2a", armor=0.7, detail=0.75, material=1),
+    "civilian":   dict(primary="d8dde0", secondary="9aa0a4", accent="2e86c1", glow="7fd8ff", armor=0.35, detail=0.65, material=1),
+    "stealth":    dict(primary="1a1c1e", secondary="0d0e10", accent="6c3483", glow="9b59b6", armor=0.8, detail=0.55, material=1),
+    "industrial": dict(primary="6e5b3a", secondary="3d3527", accent="e39a1c", glow="ffb020", armor=0.55, detail=0.8, material=0),
+    "sleek":      dict(primary="ecf0f1", secondary="34495e", accent="1abc9c", glow="6ff3d6", armor=0.4, detail=0.7, material=3),
+    "hazard":     dict(primary="e0c020", secondary="1c1c1c", accent="e0c020", glow="fff040", armor=0.6, detail=0.75, material=1),
 }
 
 DEFAULT_STYLE = "military"
@@ -112,7 +112,7 @@ class ShipSpec:
             taper_tail=float(pick(self.taper_tail, hc, "taper_tail")),
             armor=float(pick(self.armor, st, "armor")),
             detail=float(pick(self.detail, st, "detail")),
-            bevel=float(self.bevel if self.bevel is not None else st.get("bevel", 0.7)),
+            bevel=float(self.bevel if self.bevel is not None else st.get("bevel", 0.85)),
             functional=float(self.functional if self.functional is not None else 0.5),
             engines=int(pick(self.engines, hc, "engines")),
             wings=bool(pick(self.wings, hc, "wings")),

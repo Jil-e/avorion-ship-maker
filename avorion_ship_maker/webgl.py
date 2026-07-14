@@ -1,12 +1,16 @@
 """Interactive WebGL preview of a :class:`ShipModel` (Three.js in an iframe).
 
-Builds a flat triangle mesh (cubes + real wedge/corner prisms) from the ship and
+Builds a compact face mesh (cubes + real wedge/corner prisms) from the ship and
 embeds a self-contained Three.js scene with mouse orbit/zoom. Used by the Gradio
 UI via ``ship_to_iframe`` and available as a standalone file via ``save_html``.
+
+The payload is deliberately small (vertices + per-face palette indices, no
+normals — flat shading derives them on the GPU): big ships used to blow past
+the browser's data-URI limits and the preview silently failed to load.
 """
 from __future__ import annotations
 
-import base64
+import html as _html
 import json
 
 import numpy as np
@@ -33,55 +37,60 @@ def _cube_faces(b):
     return [[v[i] for i in f] for f in _CUBE_FACES]
 
 
-def _mesh_arrays(ship: ShipModel):
-    """Flatten the ship into position/normal/color arrays (triangle soup)."""
-    pos, nrm, col = [], [], []
+def _mesh_payload(ship: ShipModel):
+    """Compact mesh: flat vertex list, per-face (nverts, colorIdx), palette."""
+    verts: list[float] = []
+    faces: list[int] = []
+    palette: list[list[float]] = []
+    pal_idx: dict[tuple, int] = {}
     for b in ship.blocks:
-        rgb = _rgb(b.color)
+        rgb = tuple(round(c, 4) for c in _rgb(b.color))
+        ci = pal_idx.get(rgb)
+        if ci is None:
+            ci = pal_idx[rgb] = len(palette)
+            palette.append(list(rgb))
         lo, hi = (b.lx, b.ly, b.lz), (b.ux, b.uy, b.uz)
         if b.index in EDGE_TYPES:
-            faces = edge_faces(lo, hi, b.look, b.up)
+            flist = edge_faces(lo, hi, b.look, b.up)
         elif b.index in CORNER_TYPES:
-            faces = corner_faces(lo, hi, b.look, b.up)
+            flist = corner_faces(lo, hi, b.look, b.up)
         else:
-            faces = _cube_faces(b)
-        for face in faces:
-            pts = [np.asarray(p, float) for p in face]
-            n = np.cross(pts[1] - pts[0], pts[2] - pts[0])
-            ln = float(np.linalg.norm(n))
-            n = (n / ln) if ln > 1e-9 else np.array([0.0, 1.0, 0.0])
-            for i in range(1, len(pts) - 1):          # fan-triangulate
-                for p in (pts[0], pts[i], pts[i + 1]):
-                    pos.extend((float(p[0]), float(p[1]), float(p[2])))
-                    nrm.extend((float(n[0]), float(n[1]), float(n[2])))
-                    col.extend(rgb)
-    return pos, nrm, col
+            flist = _cube_faces(b)
+        for face in flist:
+            faces.extend((len(face), ci))
+            for p in face:
+                verts.extend((round(float(p[0]), 3), round(float(p[1]), 3),
+                              round(float(p[2]), 3)))
+    return verts, faces, palette
 
 
 def build_html(ship: ShipModel, bg: str = "#0d1117") -> str:
     """Return a full self-contained HTML document rendering the ship in WebGL."""
-    pos, nrm, col = _mesh_arrays(ship)
+    verts, faces, palette = _mesh_payload(ship)
     (lx, ly, lz), (hx, hy, hz) = ship.bounds()
     data = json.dumps({
-        "pos": pos, "nrm": nrm, "col": col,
+        "v": verts, "f": faces, "p": palette,
         "center": [(lx + hx) / 2, (ly + hy) / 2, (lz + hz) / 2],
         "size": max(hx - lx, hy - ly, hz - lz, 1.0),
         "bg": bg,
-    })
+    }, separators=(",", ":"))
     return _TEMPLATE.replace("/*DATA*/null", data).replace("__BG__", bg)
 
 
 def ship_to_iframe(ship: ShipModel, height: int = 520, bg: str = "#0d1117") -> str:
-    """Return an <iframe> (data-URI) embedding the WebGL scene, for gr.HTML."""
+    """Return an <iframe srcdoc=...> embedding the WebGL scene, for gr.HTML.
+
+    ``srcdoc`` (not a data: URI): data URIs get truncated by the browser on
+    big ships and their opaque origin defeats the HTTP cache for three.js.
+    """
     if not ship.blocks:
         return f'<div style="height:{height}px"></div>'
-    doc = build_html(ship, bg)
-    b64 = base64.b64encode(doc.encode("utf-8")).decode("ascii")
+    doc = _html.escape(build_html(ship, bg), quote=True)
     return (f'<iframe title="ship-preview" '
             f'style="width:100%;height:{height}px;border:0;border-radius:12px;'
             f'display:block;background:{bg}" '
             f'sandbox="allow-scripts allow-same-origin" '
-            f'src="data:text/html;base64,{b64}"></iframe>')
+            f'srcdoc="{doc}"></iframe>')
 
 
 def save_html(ship: ShipModel, path: str, bg: str = "#0d1117") -> str:
@@ -94,10 +103,11 @@ _TEMPLATE = """<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>html,body{margin:0;height:100%;overflow:hidden;background:__BG__;font-family:sans-serif}
 #hint{position:fixed;left:10px;bottom:8px;color:#8b949e;font-size:12px;user-select:none}
-#err{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#c9d1d9;
-padding:20px;text-align:center;font-size:14px}</style></head>
+#load,#err{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+color:#c9d1d9;padding:20px;text-align:center;font-size:14px}</style></head>
 <body>
 <div id="hint">ЛКМ — вращать · колесо — зум · ПКМ — сдвиг</div>
+<div id="load">⏳ Загрузка 3D…</div>
 <div id="err" style="display:none">Не удалось загрузить 3D-движок (нет доступа к сети?).</div>
 <script type="importmap">
 {"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js",
@@ -116,10 +126,24 @@ try {
   const renderer = new THREE.WebGLRenderer({antialias:true});
   renderer.setPixelRatio(devicePixelRatio); renderer.setSize(innerWidth, innerHeight);
   document.body.appendChild(renderer.domElement);
+  // expand the compact payload: faces -> indexed geometry + vertex colors
+  // (no normal attribute: flatShading derives face normals on the GPU)
+  const nv = D.v.length / 3;
+  const col = new Float32Array(nv * 3);
+  const idx = [];
+  let vi = 0;
+  for (let i = 0; i < D.f.length; i += 2) {
+    const n = D.f[i], c = D.p[D.f[i+1]];
+    for (let k = 0; k < n; k++) {
+      col[(vi+k)*3] = c[0]; col[(vi+k)*3+1] = c[1]; col[(vi+k)*3+2] = c[2];
+    }
+    for (let k = 1; k < n-1; k++) idx.push(vi, vi+k, vi+k+1);
+    vi += n;
+  }
   const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(D.pos, 3));
-  g.setAttribute('normal',   new THREE.Float32BufferAttribute(D.nrm, 3));
-  g.setAttribute('color',    new THREE.Float32BufferAttribute(D.col, 3));
+  g.setAttribute('position', new THREE.Float32BufferAttribute(D.v, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  g.setIndex(idx);
   const mat = new THREE.MeshStandardMaterial({vertexColors:true, metalness:0.15, roughness:0.72,
     flatShading:true, side:THREE.DoubleSide});
   scene.add(new THREE.Mesh(g, mat));
@@ -134,7 +158,12 @@ try {
     renderer.setSize(innerWidth, innerHeight);
   });
   renderer.domElement.addEventListener('pointerdown', () => ctr.autoRotate = false);
+  document.getElementById('load').style.display = 'none';
   (function loop(){ requestAnimationFrame(loop); ctr.update(); renderer.render(scene, cam); })();
-} catch (e) { document.getElementById('err').style.display='flex'; console.error(e); }
+} catch (e) {
+  document.getElementById('load').style.display = 'none';
+  document.getElementById('err').style.display = 'flex';
+  console.error(e);
+}
 </script>
 </body></html>"""

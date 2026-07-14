@@ -132,9 +132,10 @@ _PLACEHOLDER = (
     'justify-content:center;color:#93a0b4;background:#0d1117;border-radius:12px;'
     'font-family:system-ui,sans-serif;text-align:center;padding:0 40px">'
     '<div style="font-size:40px">🛠️</div>'
-    '<div style="font-size:15px;max-width:46ch">Опишите корабль справа и нажмите '
-    '<b style="color:#ff8a5c">Enter</b> — появятся варианты.<br>'
-    'Клик по варианту открывает его здесь, ползунки докручивают вживую.</div></div>')
+    '<div style="font-size:15px;max-width:48ch">Выберите справа <b style="color:#ff8a5c">класс'
+    '</b> (и, если хочется, стиль/компоновку) — варианты построятся сами.<br>'
+    'Клик по варианту открывает его здесь, ползунки докручивают вживую. '
+    'Описание текстом — опция, не обязанность.</div></div>')
 
 
 def generate(description, hull_class, style, layout, length, width, height,
@@ -277,25 +278,30 @@ def build_ui() -> gr.Blocks:
             # ---------------------------------------------- controls (right)
             with gr.Column(scale=4):
                 gr.Markdown("## 🚀 Avorion Ship Maker")
-                desc = gr.Textbox(
-                    label="Опишите корабль (можно пропустить)",
-                    placeholder="напр.: большой военный крейсер, чёрный с оранжевым",
-                    lines=2, info="Enter или 🎲 — новые варианты. Или просто выберите класс ниже")
-                understood = gr.Markdown("")
+                with gr.Row():
+                    hull_class = gr.Dropdown(cls_choices, value=AUTO, label="Класс",
+                                             info="выберите — варианты построятся сами")
+                    style = gr.Dropdown(style_choices, value=AUTO, label="Стиль")
+                with gr.Row():
+                    layout = gr.Dropdown(layout_choices, value=AUTO, label="Компоновка")
+                    wing_kind = gr.Dropdown(
+                        [("авто — от seed", AUTO)] +
+                        [(WING_KIND_NAMES[k], k) for k in WING_KINDS],
+                        value=AUTO, label="Вид крыльев")
                 variants_btn = gr.Button(f"🎲 Подобрать {N_VARIANTS} вариантов",
                                          variant="primary", size="lg")
-                gr.Markdown(
-                    "<small>Класс, стиль, компоновка, крылья и двигатели тоже сразу "
-                    "подбирают варианты. Ползунки ниже докручивают уже выбранный "
-                    "корабль.</small>")
-                with gr.Row():
-                    hull_class = gr.Dropdown(cls_choices, value=AUTO, label="Класс")
-                    style = gr.Dropdown(style_choices, value=AUTO, label="Стиль")
-                    layout = gr.Dropdown(layout_choices, value=AUTO, label="Компоновка")
-                bevel = gr.Slider(0, 1, 0.7, step=0.05, label="Скос граней",
+                understood = gr.Markdown("")
+                bevel = gr.Slider(0, 1, 0.85, step=0.05, label="Скос граней",
                                   info="0 — кубы · 1 — гладкий силуэт из клиньев")
                 functional = gr.Slider(0, 1, 0.5, step=0.05, label="Начинка",
                                        info="0 — только внешний вид · 1 — максимум рабочих блоков")
+                with gr.Accordion("✍️ Описание текстом (опционально)", open=False):
+                    desc = gr.Textbox(
+                        label="Опишите корабль",
+                        placeholder="напр.: большой военный крейсер, чёрный с оранжевым",
+                        lines=2, info="Enter — построить варианты по описанию")
+                    gr.Examples(EXAMPLES, inputs=[desc],
+                                label="Примеры (клик — подставить, Enter — сгенерировать)")
 
                 with gr.Accordion("📐 Размеры и масштаб", open=False):
                     length = gr.Slider(0, 120, 0, step=1, label="Длина, вокселей",
@@ -321,11 +327,6 @@ def build_ui() -> gr.Blocks:
                                         info="−1 — авто по классу")
                     with gr.Row():
                         wings = gr.Radio(yn, value=AUTO, label="Крылья")
-                        wing_kind = gr.Dropdown(
-                            [("авто — от seed", AUTO)] +
-                            [(WING_KIND_NAMES[k], k) for k in WING_KINDS],
-                            value=AUTO, label="Вид крыльев")
-                    with gr.Row():
                         fins = gr.Radio(yn, value=AUTO, label="Кили")
                         bridge = gr.Radio(yn, value=AUTO, label="Мостик")
 
@@ -343,8 +344,6 @@ def build_ui() -> gr.Blocks:
                     symmetry = gr.Checkbox(True, label="Симметрия")
                     seed = gr.Number(0, label="Seed", precision=0,
                                      info="тот же seed — тот же корабль")
-                gr.Examples(EXAMPLES, inputs=[desc],
-                            label="Примеры (клик — подставить, Enter — сгенерировать)")
 
         inputs = [desc, hull_class, style, layout, length, width, height, engines, wings,
                   wing_kind, fins, bridge, boxiness, armor, detail, bevel, functional,
