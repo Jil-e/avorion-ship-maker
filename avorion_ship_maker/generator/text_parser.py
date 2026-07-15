@@ -49,6 +49,8 @@ STYLE_KEYWORDS: dict[str, list[str]] = {
     "industrial": ["industrial", "utility", "worker", "промышленн", "рабоч", "утилитарн"],
     "sleek":      ["sleek", "elegant", "luxury", "обтекаемый", "элегантн", "гладк", "люкс"],
     "hazard":     ["hazard", "construction", "rescue", "аварийн", "спасательн"],
+    "cyberpunk":  ["cyberpunk", "cyber", "neon", "hi-tech", "hightech",
+                   "киберпанк", "кибер", "неон", "хайтек", "хай-тек"],
 }
 
 # stems (substring match) so any word ending is caught: "больш" -> большой/ое/ая/ие/им...

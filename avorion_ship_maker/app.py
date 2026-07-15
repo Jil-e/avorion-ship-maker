@@ -34,7 +34,8 @@ CLASS_NAMES = {"fighter": "истребитель", "corvette": "корвет", 
                "cruiser": "крейсер", "battleship": "линкор", "freighter": "грузовоз",
                "miner": "шахтёр", "carrier": "авианосец", "station": "станция"}
 STYLE_NAMES = {"military": "военный", "civilian": "гражданский", "stealth": "стелс",
-               "industrial": "промышленный", "sleek": "обтекаемый", "hazard": "аварийный"}
+               "industrial": "промышленный", "sleek": "обтекаемый", "hazard": "аварийный",
+               "cyberpunk": "киберпанк"}
 MATERIAL_NAMES = {0: "железо", 1: "титан", 2: "наонит", 3: "триний",
                   4: "ксанион", 5: "огонит", 6: "аворион"}
 WING_KIND_NAMES = {"swept": "стреловидные", "forward": "обратная стреловидность",
@@ -390,8 +391,8 @@ def build_ui() -> gr.Blocks:
                         variants_btn = gr.Button(f"🎲 Подобрать {N_VARIANTS} вариантов",
                                                  variant="primary", size="lg")
                         understood = gr.Markdown("")
-                        bevel = gr.Slider(0, 1, 0.85, step=0.05, label="Скос граней",
-                                          info="0 — кубы · 1 — гладкий силуэт из клиньев")
+                        bevel = gr.Slider(-1, 1, -1, step=0.05, label="Скос граней",
+                                          info="-1 — авто по стилю · 0 — кубы · 1 — гладкий силуэт из клиньев")
                         functional = gr.Slider(0, 1, 0.5, step=0.05, label="Начинка",
                                                info="0 — только внешний вид · 1 — максимум рабочих блоков")
                         with gr.Accordion("✍️ Описание текстом (опционально)", open=False):

@@ -20,7 +20,8 @@ from .voxel import EMPTY, VoxelGrid, greedy_merge
 # ---- voxel role codes (internal) ---------------------------------------
 (R_HULL, R_ARMOR, R_ENGINE, R_ENGINE_GLOW, R_BRIDGE, R_WING, R_FIN,
  R_GLOW, R_ACCENT, R_GEN, R_GYRO, R_THRUST, R_CARGO, R_CREW,
- R_BATTERY, R_INTEGRITY, R_SHIELD, R_DIRTHRUST, R_TURRET) = range(19)
+ R_BATTERY, R_INTEGRITY, R_SHIELD, R_DIRTHRUST, R_TURRET,
+ R_PANEL) = range(20)
 
 
 # ---- hull silhouette ----------------------------------------------------
@@ -525,9 +526,12 @@ def _resolve_roles(g: VoxelGrid, spec: ShipSpec, rng: random.Random) -> None:
     cy = int((g.Y - 1) / 2.0)
     cx = int((g.X - 1) / 2.0)
     d = float(spec.detail)
+    cyber = spec.style == "cyberpunk"
     if d > 0.15:
         spacing = max(2, int(round(4 - 2.0 * d)))   # denser dashes at high detail
-        keep = (np.arange(g.Z) % spacing == rng.randrange(spacing))
+        # cyberpunk runs its neon in unbroken full-length strips
+        keep = np.ones(g.Z, bool) if cyber else \
+            (np.arange(g.Z) % spacing == rng.randrange(spacing))
         # glow line along both flanks at mid height
         band = np.zeros_like(g.occ)
         band[:, cy, :] = True
@@ -544,6 +548,37 @@ def _resolve_roles(g: VoxelGrid, spec: ShipSpec, rng: random.Random) -> None:
             seam = top & shell & (g.role == R_ARMOR)
             seam[:, :, ~keep] = False
             g.role[seam] = R_ACCENT
+    if cyber:
+        _cyber_trim(g, shell, rng)
+
+
+def _cyber_trim(g: VoxelGrid, shell: np.ndarray, rng: random.Random) -> None:
+    """Cyberpunk-2077 vehicle language: hard right angles dressed in neon.
+
+    Convex top chines get an unbroken accent trim line, the belly edges get
+    neon underglow, and the flat flanks get recessed panel seams every few
+    plates — straight lines only, matching the style's near-zero bevel."""
+    exp = _exposed_faces(g.occ)
+    side = exp[4] | exp[5]
+    armr = shell & (g.role == R_ARMOR)
+    zmask = np.zeros(g.Z, bool)
+    zmask[int(g.Z * 0.05):int(g.Z * 0.97)] = True
+
+    def lines(m):
+        """Keep only voxels inside a z-run of >= 3 — long straight strips,
+        no lone studs on every little step of the hull."""
+        return m & np.roll(m, 1, axis=2) & np.roll(m, -1, axis=2)
+
+    chine = lines(exp[3] & side & armr)           # top edge -> accent trim
+    under = lines(exp[2] & side & armr) & ~chine  # belly edge -> underglow
+    chine[:, :, ~zmask] = False
+    under[:, :, ~zmask] = False
+    g.role[chine] = R_ACCENT
+    g.role[under] = R_GLOW
+    seam = (np.arange(g.Z) % 7 == rng.randrange(7))
+    pan = side & armr & ~chine & ~under    # dark seam rings on the flanks
+    pan[:, :, ~seam] = False
+    g.role[pan] = R_PANEL
 
 
 
@@ -553,6 +588,9 @@ def _attr_table(spec: ShipSpec) -> dict[int, tuple[int, str, int, int]]:
     acc = contrast(prim, spec.accent)   # keep accents legible against the hull
     m = spec.material
     A = to_argb
+    # a bright accent tints the whole wing olive — cyberpunk keeps them graphite
+    wing_col = shade(prim, 1.2) if spec.style == "cyberpunk" \
+        else mix(prim, acc, 0.25)
     inner = max(0, m - 1)   # interior structure is a tier below the outer armour
     return {
         R_HULL:        (index_for(Role.HULL),   A(shade(sec, 0.75)), 1, inner),
@@ -560,7 +598,7 @@ def _attr_table(spec: ShipSpec) -> dict[int, tuple[int, str, int, int]]:
         R_ENGINE:      (index_for(Role.ENGINE), A(shade(sec, 0.55)), 0, m),
         R_ENGINE_GLOW: (index_for(Role.GLOW),   A(glow),             0, m),
         R_BRIDGE:      (index_for(Role.ARMOR),  A(acc),              1, m),
-        R_WING:        (index_for(Role.ARMOR),  A(mix(prim, acc, 0.25)), 1, m),
+        R_WING:        (index_for(Role.ARMOR),  A(wing_col),         1, m),
         R_FIN:         (index_for(Role.ARMOR),  A(shade(sec, 0.9)),  1, m),
         R_GLOW:        (index_for(Role.GLOW),   A(glow),             1, m),
         R_ACCENT:      (index_for(Role.ARMOR),  A(acc),              1, m),
@@ -574,6 +612,7 @@ def _attr_table(spec: ShipSpec) -> dict[int, tuple[int, str, int, int]]:
         R_SHIELD:      (index_for(Role.SHIELD), A(mix(sec, glow, 0.3)), 0, max(2, m)),
         R_DIRTHRUST:   (index_for(Role.DIR_THRUSTER), A(shade(sec, 0.45)), 0, m),
         R_TURRET:      (index_for(Role.TURRET_BASE), A(shade(prim, 1.45)), 1, m),
+        R_PANEL:       (index_for(Role.ARMOR),  A(shade(prim, 0.5)),  1, m),
     }
 
 

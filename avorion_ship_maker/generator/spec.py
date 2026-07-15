@@ -52,6 +52,10 @@ STYLES: dict[str, dict] = {
     "industrial": dict(primary="6e5b3a", secondary="3d3527", accent="e39a1c", glow="ffb020", armor=0.55, detail=0.8, material=0),
     "sleek":      dict(primary="ecf0f1", secondary="34495e", accent="1abc9c", glow="6ff3d6", armor=0.4, detail=0.7, material=3),
     "hazard":     dict(primary="e0c020", secondary="1c1c1c", accent="e0c020", glow="fff040", armor=0.6, detail=0.75, material=1),
+    # Cyberpunk 2077 vehicle reference: hard right angles (near-zero bevel),
+    # graphite body, yellow trim, cyan neon — the builder adds edge trim,
+    # underglow and panel seams for this style (see builder._cyber_trim)
+    "cyberpunk":  dict(primary="2a2c31", secondary="141519", accent="f5df1d", glow="00e5ff", armor=0.6, detail=0.9, material=3, bevel=0.12),
 }
 
 DEFAULT_STYLE = "military"

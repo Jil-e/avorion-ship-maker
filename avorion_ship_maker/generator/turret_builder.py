@@ -12,6 +12,11 @@ housing reads as an asymmetric operator cab with a glowing window, and a
 multi-barrel gun emits several ``muzzlePosition`` entries. This builder
 speaks that vocabulary; coordinates snap to the spec's ``step`` grid
 (0.01 by default) and every subsystem rolls its own look from the seed.
+
+Any kind may roll the robo-arm chassis (shoulder tower + nodding forearm);
+the reference proves an off-centre arm is legal — its barrel pivot sits at
+``px=0.135`` while the body still yaws around the turret axis, and muzzle
+positions stay local to the barrel pivot.
 """
 from __future__ import annotations
 
@@ -242,49 +247,74 @@ def build_turret(spec: TurretSpec) -> TurretModel:
     collar_h = _q(seat + (0.05 + 0.03 * rb.random()) * S)
     octo_y(t.base, 0, 0, seat, collar_h, cw, prim)
 
-    # ================================================== robo-arm (laser)
+    # ===================================================== robo-arm variant
     # mining-manipulator look from the reference: shoulder tower with a
     # clevis, an elbow hinge drum, and the whole forearm as the elevating
-    # barrel section — in game the elbow really nods
-    if kind == "laser" and _rng("armroll").random() < 0.65:
-        ra = _rng("arm")
+    # barrel section — in game the elbow really nods. Every kind can roll
+    # one; only the wrist head changes (laser guns / cutting bar, gatling
+    # pod, stubby autocannons, rail fork, missile cassette).
+    arm_p = {"laser": 0.65, "chaingun": 0.35, "cannon": 0.30,
+             "railgun": 0.30, "launcher": 0.35}[kind]
+    if _rng("armroll").random() < arm_p:
+        ra = _rng(f"arm:{kind}")         # each kind rolls its own chassis
         hcol = ra.choice((prim, shade(prim, 0.88), mix(prim, sec, 0.35)))
         aw = _q(0.16 * S * (0.85 + 0.3 * ra.random()))     # shoulder half-width
+        # variation: the tower may stand off-centre like the reference crane
+        # (its barrel pivot sits at px=0.135); the body still yaws around 0
+        x_off = 0.0
+        if ra.random() < 0.5:
+            x_off = _q(ra.choice((1, -1)) * (0.08 + 0.10 * ra.random()) * S)
         y0a = collar_h
         tow_h = _q((0.30 + 0.12 * ra.random()) * S)
         ys1 = _q(y0a + tow_h)
         tz0, tzf = _q(-0.22 * S), _q(0.12 * S)             # tower z extent
-        box(t.body, -aw, y0a, tz0, aw, ys1, tzf, hcol)
-        wedge(t.body, -aw, ys1, tzf - 0.06 * S, aw, ys1 + 0.06 * S, tzf,
-              hcol, _YP, _ZP)
+        # yaw platform: keeps an offset tower seated over the collar
+        pl_h = _q(max(0.03 * S, step))
+        y0t = _q(y0a + pl_h)
+        box(t.body, min(-cw * 0.9, x_off - aw), y0a, tz0,
+            max(cw * 0.9, x_off + aw), y0t, tzf, shade(hcol, 0.9))
+        box(t.body, x_off - aw, y0t, tz0, x_off + aw, ys1, tzf, hcol)
+        wedge(t.body, x_off - aw, ys1, tzf - 0.06 * S, x_off + aw,
+              ys1 + 0.06 * S, tzf, hcol, _YP, _ZP)
         # rear equipment pack + cooling vents on it
-        box(t.body, -aw * 0.8, y0a + tow_h * 0.15, tz0 - 0.1 * S,
-            aw * 0.8, y0a + tow_h * 0.7, tz0, shade(sec, 0.8))
+        box(t.body, x_off - aw * 0.8, y0a + tow_h * 0.15, tz0 - 0.1 * S,
+            x_off + aw * 0.8, y0a + tow_h * 0.7, tz0, shade(sec, 0.8))
         for i in range(2):
             vy = y0a + tow_h * (0.25 + 0.2 * i)
-            box(t.body, -aw * 0.55, vy, tz0 - 0.12 * S, aw * 0.55,
-                vy + tow_h * 0.09, tz0 - 0.1 * S, _DARK)
+            box(t.body, x_off - aw * 0.55, vy, tz0 - 0.12 * S,
+                x_off + aw * 0.55, vy + tow_h * 0.09, tz0 - 0.1 * S, _DARK)
         # glow status strip on the tower face
-        box(t.body, -0.04 * S, y0a + tow_h * 0.12, tzf, 0.04 * S,
-            y0a + tow_h * 0.5, tzf + 0.015 * S, glow, idx=_GLOW)
+        box(t.body, x_off - 0.04 * S, y0a + tow_h * 0.12, tzf,
+            x_off + 0.04 * S, y0a + tow_h * 0.5, tzf + 0.015 * S,
+            glow, idx=_GLOW)
         # clevis cheeks that hold the elbow, with accent hinge caps
         ct = _q(max(0.035 * S, 2 * step))
         ye = _q(ys1 + 0.10 * S)
         for s in (1, -1):
-            box(t.body, s * aw, ys1 - 0.12 * S, -0.13 * S,
-                s * (aw + ct), ye + 0.11 * S, 0.13 * S, shade(hcol, 0.85))
-            box(t.body, s * (aw + ct), ye - 0.035 * S, -0.035 * S,
-                s * (aw + ct + 0.012 * S), ye + 0.035 * S, 0.035 * S, acc)
+            box(t.body, x_off + s * aw, ys1 - 0.12 * S, -0.13 * S,
+                x_off + s * (aw + ct), ye + 0.11 * S, 0.13 * S,
+                shade(hcol, 0.85))
+            box(t.body, x_off + s * (aw + ct), ye - 0.035 * S, -0.035 * S,
+                x_off + s * (aw + ct + 0.012 * S), ye + 0.035 * S, 0.035 * S,
+                acc)
 
         # ---- forearm = the elevating section, pivot at the elbow --------
         # its own rolls: boom build, fake mid-joint, head build x mount,
-        # 1-4 emitters/guns (row, or a 2x2 block for four)
-        t.barrel_pivot = (0.0, ye, 0.0)
+        # head count (row, or a 2x2 block for four); muzzles are LOCAL to
+        # the pivot, so an offset arm needs no coordinate changes below
+        t.barrel_pivot = (x_off, ye, 0.0)
         boom_kind = ra.choice(("solid", "twin"))
         mount = ra.choice(("inline", "under"))
-        head_build = ra.choice(("stub", "gun", "gun", "cutter"))
-        nb_a = spec.barrels if spec.barrels and spec.barrels > 0 else \
-            ra.choice((1, 1, 2))
+        head_build = ra.choice(("stub", "gun", "gun", "cutter")) \
+            if kind == "laser" else {"cannon": "gun", "chaingun": "gatling",
+                                     "railgun": "rails", "launcher": "pod"}[kind]
+        if kind == "railgun":
+            nb_a = 1              # the fork fires one shot, like the main build
+        elif spec.barrels and spec.barrels > 0:
+            nb_a = spec.barrels
+        else:
+            nb_a = ra.choice((1, 1, 2)) if kind in ("laser", "cannon") \
+                else ra.choice((2, 3, 4))
         nb_a = max(1, min(4, int(nb_a)))
         if head_build == "cutter" and nb_a > 1:
             head_build = "gun"           # the cutting bar is one wide head
@@ -331,14 +361,39 @@ def build_turret(spec: TurretSpec) -> TurretModel:
         zw = _q(z_b1 + wh2)
         octo_x(t.barrel, -bw * 0.9, bw * 0.9, 0, zw, wh2, shade(prim, 0.85))
 
-        # emitter layout: a row, or a 2x2 block for four
+        # head layout: single-pod kinds centre one big head; gun kinds get
+        # a row of 1-3 heads or a 2x2 block of four
+        n_heads = nb_a if kind in ("laser", "cannon") else 1
         er = _q(wh2 * 0.7)
-        er_n = _q(max(min(er, {1: 1.0, 2: 0.42, 3: 0.26, 4: 0.40}[nb_a] * bw),
+        er_n = _q(max(min(er, {1: 1.0, 2: 0.42, 3: 0.26, 4: 0.40}[n_heads] * bw),
                       3 * step))
         ps = _q(2.6 * er_n)
         offs = {1: ((0, 0),), 2: ((-0.5, 0), (0.5, 0)),
                 3: ((-1, 0), (0, 0), (1, 0)),
-                4: ((-0.5, -1.3), (0.5, -1.3), (-0.5, 1.3), (0.5, 1.3))}[nb_a]
+                4: ((-0.5, -1.3), (0.5, -1.3), (-0.5, 1.3), (0.5, 1.3))}[n_heads]
+        # per-head extents drive the under-mount bracket and clearances
+        if head_build == "gatling":
+            cal_a = _q(max(0.045 * S, 2 * step))
+            d_a = _q(0.8 * cal_a)                       # tube cluster radius
+            dw_a = _q(1.9 * (d_a + cal_a) + 0.02 * S)   # pod drum radius
+            top_reach, span_x = dw_a + 0.015 * S, dw_a
+        elif head_build == "rails":
+            rc = _q(max(0.035 * S, 2 * step))           # rail half-thickness
+            rx = _q(max(2.4 * rc, 0.09 * S))            # rail lateral offset
+            rlen = _q((0.45 + 0.3 * ra.random()) * S)
+            top_reach, span_x = 1.5 * rc, rx + rc
+        elif head_build == "pod":
+            pc = _q(max(0.04 * S, 2 * step))            # missile cell caliber
+            cols_a = {1: (1, 1), 2: (2, 1), 3: (3, 1), 4: (2, 2)}[nb_a]
+            pitch_a = _q(2.0 * pc)
+            px_h = _q(cols_a[0] * pitch_a / 2 + 0.02 * S)
+            py_h = _q(cols_a[1] * pitch_a / 2 + 0.02 * S)
+            plen = _q((0.30 + 0.15 * ra.random()) * S)
+            chb = _q(min(0.04 * S, py_h * 0.5))
+            top_reach, span_x = py_h + chb, px_h
+        else:
+            top_reach = (1.3 + 1.125) * er_n if n_heads == 4 else 1.125 * er_n
+            span_x = max(abs(o[0]) * ps for o in offs) + er_n
 
         def laser_gun(x, yy, z0, glen, c):
             """A proper little laser gun: dish, cone, ringed tube, glow tip."""
@@ -358,6 +413,18 @@ def build_turret(spec: TurretSpec) -> TurretModel:
                    glow, idx=_GLOW)
             return _q(ze + 0.06 * S)
 
+        def cannon_gun(x, yy, z0, glen, c):
+            """A stubby autocannon: mantlet ring, cone, tube, dark muzzle."""
+            m1 = _q(z0 + 0.09 * S)
+            octo_z(t.barrel, x, yy, z0, m1, c * 1.4, ring_col)
+            octo_taper(t.barrel, x, yy, m1, _q(m1 + 0.03 * S), c * 1.4,
+                       c * 0.7, barrel_metal)
+            ze = _q(z0 + glen)
+            box(t.barrel, x - c * 0.7, yy - c * 0.7, m1, x + c * 0.7,
+                yy + c * 0.7, ze, barrel_metal)
+            octo_z(t.barrel, x, yy, ze, _q(ze + 0.05 * S), c * 0.55, _DARK)
+            return _q(ze + 0.05 * S)
+
         def head_stub(x, yy, z0):
             octo_z(t.barrel, x, yy, z0, z0 + 0.07 * S, er_n, ring_col, cut=0.3)
             octo_z(t.barrel, x, yy, z0 + 0.07 * S, z0 + 0.12 * S, er_n * 0.55,
@@ -365,10 +432,9 @@ def build_turret(spec: TurretSpec) -> TurretModel:
             return _q(z0 + 0.12 * S)
 
         if mount == "under":             # heads slung under the wrist
-            top_reach = (1.3 + 1.125) * er_n if nb_a == 4 else 1.125 * er_n
             bh2 = _q(max(0.06 * S, top_reach + 2 * step))
             hy = _q(-wh2 - bh2)
-            brx = _q(min(bw * 0.9, max(abs(o[0]) * ps for o in offs) + er_n))
+            brx = _q(min(bw * 0.9, span_x))
             box(t.barrel, -brx, hy, zw - 0.05 * S, brx, -wh2, zw + 0.05 * S,
                 shade(hcol, 0.85))
             e0, base_y = _q(zw + 0.05 * S), hy
@@ -383,13 +449,73 @@ def build_turret(spec: TurretSpec) -> TurretModel:
                 cw2 * 0.85, base_y + 0.025 * S, _q(e0 + 2 * er + 0.015 * S),
                 glow, idx=_GLOW)
             t.muzzles = [(0.0, base_y, _q(e0 + 2 * er + 0.015 * S))]
-        else:
+        elif head_build == "gatling":    # compact rotary pod off the wrist
+            d_len = _q((0.14 + 0.08 * ra.random()) * S)
+            z_d1 = _q(e0 + d_len)
+            octo_z(t.barrel, 0, base_y, e0, z_d1, dw_a, barrel_metal)
+            box(t.barrel, -dw_a * 0.6, base_y + dw_a, e0 + d_len * 0.3,
+                dw_a * 0.6, base_y + dw_a + 0.015 * S, e0 + d_len * 0.7, acc)
+            face_z = drum_face(t.barrel, 0, base_y, z_d1, dw_a, 0.03 * S)
+            pat = {1: ((0, 0),), 2: ((-1, 0), (1, 0)),
+                   3: ((-1, -0.7), (1, -0.7), (0, 0.9)),
+                   4: ((-1, -1), (1, -1), (-1, 1), (1, 1))}[nb_a]
+            t_end = _q(face_z + (0.16 + 0.08 * ra.random()) * S)
+            for fx, fy in pat:
+                x, yy = _q(fx * d_a), _q(base_y + fy * d_a)
+                box(t.barrel, x - cal_a / 2, yy - cal_a / 2, face_z,
+                    x + cal_a / 2, yy + cal_a / 2, t_end, barrel_metal)
+                box(t.barrel, x - cal_a * 0.6, yy - cal_a * 0.6, t_end,
+                    x + cal_a * 0.6, yy + cal_a * 0.6, _q(t_end + 0.02 * S),
+                    shade(sec, 0.55))
+                t.muzzles.append((x, yy, _q(t_end + 0.02 * S)))
+        elif head_build == "rails":      # rail fork: breech, twin rails, arc
+            br1 = _q(e0 + 0.05 * S)
+            box(t.barrel, -(rx + rc), base_y - 1.5 * rc, e0, rx + rc,
+                base_y + 1.5 * rc, br1, shade(prim, 0.85))
+            ze = _q(br1 + rlen)
+            for s in (1, -1):
+                box(t.barrel, s * rx - rc, base_y - 1.4 * rc, br1,
+                    s * rx + rc, base_y + 1.4 * rc, ze, barrel_metal)
+                box(t.barrel, s * rx - rc, base_y - 0.5 * rc, ze,
+                    s * rx + rc, base_y + 0.5 * rc, _q(ze + 0.03 * S), acc)
+            inx = _q(rx - rc)
+            for fz in (0.4, 0.75):       # spacer bars between the rails
+                box(t.barrel, -inx, base_y - 0.7 * rc, _q(br1 + rlen * fz), inx,
+                    base_y + 0.7 * rc, _q(br1 + rlen * fz + 0.035 * S),
+                    mix(sec, acc, 0.5))
+            box(t.barrel, -inx, base_y - 0.4 * rc, br1, inx, base_y + 0.4 * rc,
+                _q(br1 + rlen * 0.18), glow, idx=_GLOW)   # arc near the breech
+            t.muzzles.append((0.0, base_y, ze))
+        elif head_build == "pod":        # missile cassette with cell collars
+            bcol_a = mix(sec, prim, 0.45)
+            zL = _q(e0 + plen)
+            box(t.barrel, -px_h, base_y - py_h, e0, px_h, base_y + py_h, zL,
+                bcol_a)
+            wedge(t.barrel, -px_h + chb, base_y + py_h, zL - chb, px_h - chb,
+                  base_y + py_h + chb, zL, bcol_a, _YP, _ZP)
+            box(t.barrel, -px_h * 0.8, base_y + py_h, zL - 0.12 * S,
+                px_h * 0.8, base_y + py_h + 0.012 * S, zL - 0.08 * S, acc)
+            for i in range(cols_a[0]):
+                for j in range(cols_a[1]):
+                    cxx = _q((i - (cols_a[0] - 1) / 2) * pitch_a)
+                    cyy = _q(base_y + (j - (cols_a[1] - 1) / 2) * pitch_a)
+                    octo_z(t.barrel, cxx, cyy, zL, _q(zL + 0.025 * S),
+                           pc * 0.62, shade(sec, 0.6))
+                    box(t.barrel, cxx - pc * 0.3, cyy - pc * 0.3,
+                        _q(zL + 0.025 * S), cxx + pc * 0.3, cyy + pc * 0.3,
+                        _q(zL + 0.04 * S), _DARK)
+                    t.muzzles.append((cxx, cyy, _q(zL + 0.04 * S)))
+        else:                            # a row / 2x2 grid of gun heads
             t.muzzles = []
             glen = _q((0.35 + 0.25 * ra.random()) * S)
             for fx, fy in offs:
                 hx, hyy = _q(fx * ps), _q(base_y + fy * er_n)
-                tip = laser_gun(hx, hyy, e0, glen, er_n * 0.75) \
-                    if head_build == "gun" else head_stub(hx, hyy, e0)
+                if head_build == "stub":
+                    tip = head_stub(hx, hyy, e0)
+                elif kind == "cannon":
+                    tip = cannon_gun(hx, hyy, e0, glen, er_n * 0.75)
+                else:
+                    tip = laser_gun(hx, hyy, e0, glen, er_n * 0.75)
                 t.muzzles.append((hx, hyy, tip))
         return t
 
@@ -606,7 +732,7 @@ def build_turret(spec: TurretSpec) -> TurretModel:
         # reference look: a fat octagonal gun drum with a bright ring face
         # and the barrel cluster poking out of its dark core
         pat = {1: ((0, 0),), 2: ((-1, 0), (1, 0)),
-               3: ((-1, -0.6), (1, -0.6), (0, 0.8)),
+               3: ((-1, -0.7), (1, -0.7), (0, 0.9)),
                4: ((-1, -1), (1, -1), (-1, 1), (1, 1))}[nb]
         d_len = _q(0.45 * L)
         octo_z(t.barrel, 0, 0, z0t, z0t + d_len, dw, barrel_metal)
