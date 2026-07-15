@@ -21,7 +21,7 @@ positions stay local to the barrel pivot.
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .. import orient
 from ..blocks import Role, index_for
@@ -94,6 +94,51 @@ def _shot_color(glow_hex: str) -> int:
     return v - 2 ** 32 if v >= 2 ** 31 else v
 
 
+def _clip_overlaps(blocks: list[Block]) -> list[Block]:
+    """Last-resort geometric guarantee: later blocks (details) are clipped
+    against earlier ones (structure), or dropped when swallowed whole.
+
+    Sub-step design margins vanish on coarse grids (e.g. size 1 with step
+    0.1) and Avorion rejects intersecting blocks, so after this pass an
+    overlap is impossible by construction."""
+    eps = 1e-6
+    out: list[Block] = []
+    for b in blocks:
+        cur = b
+        dead = False
+        for a in out:
+            ox = min(a.ux, cur.ux) - max(a.lx, cur.lx)
+            oy = min(a.uy, cur.uy) - max(a.ly, cur.ly)
+            oz = min(a.uz, cur.uz) - max(a.lz, cur.lz)
+            if ox <= eps or oy <= eps or oz <= eps:
+                continue
+            cuts = []
+            if cur.lx < a.lx:
+                cuts.append((ox, "ux", a.lx))
+            if cur.ux > a.ux:
+                cuts.append((ox, "lx", a.ux))
+            if cur.ly < a.ly:
+                cuts.append((oy, "uy", a.ly))
+            if cur.uy > a.uy:
+                cuts.append((oy, "ly", a.uy))
+            if cur.lz < a.lz:
+                cuts.append((oz, "uz", a.lz))
+            if cur.uz > a.uz:
+                cuts.append((oz, "lz", a.uz))
+            if not cuts:
+                dead = True              # fully inside the structure block
+                break
+            _, attr, val = min(cuts, key=lambda c: c[0])
+            cur = replace(cur, **{attr: val})
+            if (cur.ux - cur.lx <= eps or cur.uy - cur.ly <= eps
+                    or cur.uz - cur.lz <= eps):
+                dead = True
+                break
+        if not dead:
+            out.append(cur)
+    return out
+
+
 def build_turret(spec: TurretSpec) -> TurretModel:
     """Build a full turret design from the spec (deterministic per seed)."""
     st = STYLES.get(spec.style, STYLES[DEFAULT_STYLE])
@@ -115,6 +160,13 @@ def build_turret(spec: TurretSpec) -> TurretModel:
         return random.Random(f"{spec.seed}:t:{tag}")
 
     t = TurretModel(size=spec.size, shot_color=_shot_color(glow))
+
+    def _done() -> TurretModel:
+        """Run the no-overlap guarantee over every section before returning."""
+        t.base = _clip_overlaps(t.base)
+        t.body = _clip_overlaps(t.body)
+        t.barrel = _clip_overlaps(t.barrel)
+        return t
 
     def box(sect, x0, y0, z0, x1, y1, z1, color, idx=_HULL, look=1, up=3):
         lo = [_q(min(x0, x1)), _q(min(y0, y1)), _q(min(z0, z1))]
@@ -191,11 +243,20 @@ def build_turret(spec: TurretSpec) -> TurretModel:
               color, _XN, _ZP)
 
     def drum_face(sect, cx, cy, z_at, w, depth):
-        """Muzzle drum: bright ring face with a dark protruding core."""
-        octo_z(sect, cx, cy, z_at, z_at + depth, w, ring_col, cut=0.3)
-        octo_z(sect, cx, cy, z_at + depth, z_at + depth + 0.02 * S,
-               w * 0.55, _DARK, cut=0.3)
-        return _q(z_at + depth + 0.02 * S)
+        """Muzzle drum: bright ring face with a dark protruding core.
+
+        Layer bounds are fixed on the grid FIRST — quantizing them inside
+        box() let a sub-step layer get bumped past the returned face, so
+        whatever the caller attached at the face sat inside the core."""
+        z1 = _q(z_at + max(depth, step))
+        if z1 <= z_at:
+            z1 = _q(z_at + step)
+        z2 = _q(z1 + max(0.02 * S, step))
+        if z2 <= z1:
+            z2 = _q(z1 + step)
+        octo_z(sect, cx, cy, z_at, z1, w, ring_col, cut=0.3)
+        octo_z(sect, cx, cy, z1, z2, w * 0.55, _DARK, cut=0.3)
+        return z2
 
     # =============================================================== base
     rb = _rng("base")
@@ -476,12 +537,17 @@ def build_turret(spec: TurretSpec) -> TurretModel:
                    3: ((-1, -0.7), (1, -0.7), (0, 0.9)),
                    4: ((-1, -1), (1, -1), (-1, 1), (1, 1))}[nb_a]
             t_end = _q(face_z + (0.16 + 0.08 * ra.random()) * S)
-            for fx, fy in pat:
-                x, yy = _q(fx * d_a), _q(base_y + fy * d_a)
-                box(t.barrel, x - cal_a / 2, yy - cal_a / 2, face_z,
-                    x + cal_a / 2, yy + cal_a / 2, t_end, barrel_metal)
-                box(t.barrel, x - cal_a * 0.6, yy - cal_a * 0.6, t_end,
-                    x + cal_a * 0.6, yy + cal_a * 0.6, _q(t_end + 0.02 * S),
+            cts = [(_q(fx * d_a), _q(base_y + fy * d_a)) for fx, fy in pat]
+            sep = min((max(abs(x1 - x2), abs(y1 - y2))
+                       for i, (x1, y1) in enumerate(cts)
+                       for x2, y2 in cts[i + 1:]), default=1e9)
+            th = min(cal_a / 2, max(sep / 2 - step / 2, step / 2))
+            chh = min(cal_a * 0.6, max(sep / 2 - step / 2, step / 2))
+            for x, yy in cts:
+                box(t.barrel, x - th, yy - th, face_z,
+                    x + th, yy + th, t_end, barrel_metal)
+                box(t.barrel, x - chh, yy - chh, t_end,
+                    x + chh, yy + chh, _q(t_end + 0.02 * S),
                     shade(sec, 0.55))
                 t.muzzles.append((x, yy, _q(t_end + 0.02 * S)))
         elif head_build == "rails":      # rail fork: breech, twin rails, arc
@@ -533,7 +599,7 @@ def build_turret(spec: TurretSpec) -> TurretModel:
                 else:
                     tip = laser_gun(hx, hyy, e0, glen, er_n * 0.75)
                 t.muzzles.append((hx, hyy, tip))
-        return t
+        return _done()
 
     # =============================================================== body
     rh = _rng("body")
@@ -623,14 +689,20 @@ def build_turret(spec: TurretSpec) -> TurretModel:
         box(t.body, drum_side * (hw + pk), y0 + hh * 0.08, -0.3 * W,
             drum_side * (hw + pk + 0.2 * S), y0 + hh * 0.55, 0.2 * W,
             shade(sec, 0.85))
+    win_side, win_y0 = 0, None
     if rf.random() < 0.55:               # operator window: dark frame + glow pane
         ws = -drum_side if drum_side else rf.choice((1, -1))
         wy0, wy1 = _q(fy0 + fh * 0.45), _q(fy0 + fh * 0.8)
         wz0, wz1 = _q(hz0 + (hz1 - hz0) * 0.55), _q(hz0 + (hz1 - hz0) * 0.85)
         wx = _q(fw + (pk if arch == "slab" else 0))
-        box(t.body, ws * wx, wy0, wz0, ws * (wx + 0.012 * S), wy1, wz1, _DARK)
-        box(t.body, ws * (wx + 0.012 * S), wy0 + fh * 0.05, wz0 + 0.02 * S,
-            ws * (wx + 0.02 * S), wy1 - fh * 0.05, wz1 - 0.02 * S, glow, idx=_GLOW)
+        # on-grid layer bounds: at coarse grids 0.012*S falls below one step
+        # and the frame + pane used to collapse into the same slab
+        x_f = _q(wx + max(0.012 * S, step))
+        x_p = _q(x_f + max(0.008 * S, step))
+        box(t.body, ws * wx, wy0, wz0, ws * x_f, wy1, wz1, _DARK)
+        box(t.body, ws * x_f, wy0 + fh * 0.05, wz0 + 0.02 * S,
+            ws * x_p, wy1 - fh * 0.05, wz1 - 0.02 * S, glow, idx=_GLOW)
+        win_side, win_y0 = ws, wy0
     # top features stay inside the chamfer-free zone of the roof
     tz0, tz1 = _q(hz0 + ch), _q(hz1 - ch)
     if rf.random() < 0.4:                # sensor mast + emissive tip
@@ -650,9 +722,15 @@ def build_turret(spec: TurretSpec) -> TurretModel:
                 ry + fh * 0.22, rz + 0.05 * S, shade(sec, 0.65))
     if rf.random() < 0.45:               # cable conduit, below the window band
         cs = -drum_side if drum_side else rf.choice((1, -1))
-        box(t.body, cs * (hw + pk), y0 + hh * 0.24, hz0 + (hz1 - hz0) * 0.2,
-            cs * (hw + pk + 0.02 * S), y0 + hh * 0.38, hz0 + (hz1 - hz0) * 0.85,
-            shade(sec, 0.5))
+        cy0, cy1 = _q(y0 + hh * 0.24), _q(y0 + hh * 0.38)
+        if cs == win_side and win_y0 is not None:
+            # quantization can erase the band gap on coarse grids — keep a
+            # full step of air below the window frame
+            cy1 = min(cy1, _q(win_y0 - step))
+        if cy1 > cy0:
+            box(t.body, cs * (hw + pk), cy0, hz0 + (hz1 - hz0) * 0.2,
+                cs * (hw + pk + 0.02 * S), cy1, hz0 + (hz1 - hz0) * 0.85,
+                shade(sec, 0.5))
     # one accent element, placement rolled ("front" clashes with a wedge glacis)
     place = rf.choice(("sides", "top") if arch == "wedge" else ("sides", "top", "front"))
     # flank bands are height-separated: accent 8-22%, conduit 24-38%,
@@ -756,12 +834,19 @@ def build_turret(spec: TurretSpec) -> TurretModel:
         # accent ring stripe across the drum's flat top band
         box(t.barrel, -dw * 0.6, dw, z0t + d_len * 0.35, dw * 0.6,
             dw + 0.015 * S, z0t + d_len * 0.65, acc)
-        for fx, fy in pat:
-            x, yy = _q(fx * d), _q(fy * d)
-            box(t.barrel, x - cal / 2, yy - cal / 2, face_z,
-                x + cal / 2, yy + cal / 2, z0t + L, barrel_metal)
-            box(t.barrel, x - cal * 0.6, yy - cal * 0.6, z0t + L,
-                x + cal * 0.6, yy + cal * 0.6, z0t + L + 0.03 * S, shade(sec, 0.55))
+        cts = [(_q(fx * d), _q(fy * d)) for fx, fy in pat]
+        # snapping can pull neighbouring tubes closer than designed — size
+        # the tubes and end caps off the ACTUAL minimum separation
+        sep = min((max(abs(x1 - x2), abs(y1 - y2))
+                   for i, (x1, y1) in enumerate(cts)
+                   for x2, y2 in cts[i + 1:]), default=1e9)
+        th = min(cal / 2, max(sep / 2 - step / 2, step / 2))
+        chh = min(cal * 0.6, max(sep / 2 - step / 2, step / 2))
+        for x, yy in cts:
+            box(t.barrel, x - th, yy - th, face_z,
+                x + th, yy + th, z0t + L, barrel_metal)
+            box(t.barrel, x - chh, yy - chh, z0t + L,
+                x + chh, yy + chh, z0t + L + 0.03 * S, shade(sec, 0.55))
             t.muzzles.append((x, yy, _q(z0t + L + 0.03 * S)))
     else:
         brake = rr.choice(("ring", "baffle", "none")) if kind == "cannon" else None
@@ -825,17 +910,29 @@ def build_turret(spec: TurretSpec) -> TurretModel:
                     z_end, barrel_metal)
                 t.muzzles.append((x, 0.0, z_end))
         if kind == "railgun" and nb >= 2:
-            inx = _q(spread / 2 - cal / 2)
-            for fz in (0.3, 0.62, 0.9):  # spacer bars between the rails
-                box(t.barrel, -inx, -cal * 0.4, _q(z0t + L * fz), inx, cal * 0.4,
-                    _q(z0t + L * fz + 0.04 * S), mix(sec, acc, 0.5))
-            box(t.barrel, -inx, -cal * 0.25, z0t, inx, cal * 0.25,
-                _q(z0t + L * 0.14), glow, idx=_GLOW)   # arc glow near the breech
-            for s in (1, -1):            # capacitor drums outside the rails
-                octo_z(t.barrel, s * (spread / 2 + cal / 2 + 0.8 * cal), 0,
-                       z0t, _q(z0t + L * 0.35), cal * 0.8, shade(sec, 0.8))
+            # spacers + arc glow live in the GAPS between adjacent rails —
+            # spanning the whole width ran them through the middle rails
+            # whenever more than two were requested
+            xs_r = [_q((k - (nb - 1) / 2) * gap * cal) for k in range(nb)]
+            for a, b in zip(xs_r, xs_r[1:]):
+                g0, g1 = _q(a + cal / 2), _q(b - cal / 2)
+                if g1 - g0 < step:
+                    continue
+                for fz in (0.3, 0.62, 0.9):            # spacer bars
+                    box(t.barrel, g0, -cal * 0.4, _q(z0t + L * fz), g1,
+                        cal * 0.4, _q(z0t + L * fz + 0.04 * S),
+                        mix(sec, acc, 0.5))
+                box(t.barrel, g0, -cal * 0.25, z0t, g1, cal * 0.25,
+                    _q(z0t + L * 0.14), glow, idx=_GLOW)   # arc near the breech
+            # capacitor drums sit flush against the outer rail faces (an
+            # off-grid centre used to let them sink into the rails)
+            rail_out = _q(xs_r[-1] + cal / 2)
+            cw_r = _q(max(0.8 * cal, 2 * step))
+            for s in (1, -1):
+                octo_z(t.barrel, s * (rail_out + cw_r), 0,
+                       z0t, _q(z0t + L * 0.35), cw_r, shade(sec, 0.8))
             t.muzzles = [(0.0, 0.0, _q(z_end))]        # one shot between rails
 
     if not t.muzzles:
         t.muzzles = [(0.0, 0.0, _q(z0t + L))]
-    return t
+    return _done()

@@ -134,8 +134,10 @@ def _hull_arrays(spec: ShipSpec, rng: random.Random):
         # smooth taper otherwise reads as a 1-voxel staircase, not CP2077
         qw = max(1.5, base_hw * 0.16)
         qh = max(1.5, base_hh * 0.16)
-        hw = np.maximum(np.round(hw / qw) * qw, 1.0)
-        hh = np.maximum(np.round(hh / qh) * qh, 1.0)
+        # rounding may bump a band above the nominal size — clip so the
+        # hull never outgrows the grid the caller sized from spec.width
+        hw = np.clip(np.round(hw / qw) * qw, 1.0, base_hw)
+        hh = np.clip(np.round(hh / qh) * qh, 1.0, base_hh)
         yoff = np.round(yoff)            # flat decks, no vertical drift
         pexp = np.full_like(pexp, 9.0)   # hard rectangular cross-section
     return hw, hh, yoff, pexp
