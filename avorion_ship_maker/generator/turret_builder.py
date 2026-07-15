@@ -94,6 +94,43 @@ def _shot_color(glow_hex: str) -> int:
     return v - 2 ** 32 if v >= 2 ** 31 else v
 
 
+def _drop_floaters(blocks: list[Block]) -> list[Block]:
+    """Keep only the largest face-connected component of a section.
+
+    On very coarse grids a cosmetic flank detail (a vent, a rangefinder
+    stub) can quantize just past its parent's band and float free; a
+    floating block is illegal in game, losing the trinket is not."""
+    n = len(blocks)
+    if n <= 1:
+        return blocks
+    import numpy as np
+    lo = np.array([[b.lx, b.ly, b.lz] for b in blocks])
+    hi = np.array([[b.ux, b.uy, b.uz] for b in blocks])
+    label = [-1] * n
+    comp = 0
+    for s in range(n):
+        if label[s] >= 0:
+            continue
+        label[s] = comp
+        stack = [s]
+        while stack:
+            i = stack.pop()
+            ov = np.minimum(hi[i], hi) - np.maximum(lo[i], lo)
+            conn = (ov >= -1e-4).all(axis=1) & ((ov > 1e-4).sum(axis=1) >= 2)
+            for j in np.where(conn)[0]:
+                if label[j] < 0:
+                    label[j] = comp
+                    stack.append(int(j))
+        comp += 1
+    if comp == 1:
+        return blocks
+    sizes = [0] * comp
+    for l in label:
+        sizes[l] += 1
+    best = sizes.index(max(sizes))
+    return [b for b, l in zip(blocks, label) if l == best]
+
+
 def _clip_overlaps(blocks: list[Block]) -> list[Block]:
     """Last-resort geometric guarantee: later blocks (details) are clipped
     against earlier ones (structure), or dropped when swallowed whole.
@@ -162,10 +199,10 @@ def build_turret(spec: TurretSpec) -> TurretModel:
     t = TurretModel(size=spec.size, shot_color=_shot_color(glow))
 
     def _done() -> TurretModel:
-        """Run the no-overlap guarantee over every section before returning."""
-        t.base = _clip_overlaps(t.base)
-        t.body = _clip_overlaps(t.body)
-        t.barrel = _clip_overlaps(t.barrel)
+        """Geometric guarantees before returning: no overlaps, one piece."""
+        t.base = _drop_floaters(_clip_overlaps(t.base))
+        t.body = _drop_floaters(_clip_overlaps(t.body))
+        t.barrel = _drop_floaters(_clip_overlaps(t.barrel))
         return t
 
     def box(sect, x0, y0, z0, x1, y1, z1, color, idx=_HULL, look=1, up=3):
@@ -296,8 +333,8 @@ def build_turret(spec: TurretSpec) -> TurretModel:
             box(t.base, a0, 0, pw, a1, plate_top, pw + bt,
                 _HAZARD_B if i % 2 == 0 else _HAZARD_A)
     elif base_kind != "octo" and rb.random() < 0.5:    # rim bolts instead
-        bs = _q(0.035 * S)
-        bx = _q(pw - 2 * bs)
+        bs = _q(max(0.035 * S, step))    # a whole cell, or it snaps to zero
+        bx = _q(max(pw - 2 * bs, bs))    # ... and slides off the plate edge
         for sxx in (1, -1):
             for fz in rb.choice(((-0.7, 0.7), (-0.7, 0.0, 0.7))):
                 bz = _q(fz * bx)
@@ -386,13 +423,17 @@ def build_turret(spec: TurretSpec) -> TurretModel:
         head_build = ra.choice(("stub", "gun", "gun", "cutter")) \
             if kind == "laser" else {"cannon": "gun", "chaingun": "gatling",
                                      "railgun": "rails", "launcher": "pod"}[kind]
+        # roll first, THEN override — skipping the draw when the slider is
+        # set used to reshuffle every later roll (boom, knuckle, lengths),
+        # so dragging the barrels slider redesigned the whole forearm
+        rolled_a = ra.choice((1, 1, 2)) if kind in ("laser", "cannon") \
+            else ra.choice((2, 3, 4))
         if kind == "railgun":
             nb_a = 1              # the fork fires one shot, like the main build
         elif spec.barrels and spec.barrels > 0:
             nb_a = spec.barrels
         else:
-            nb_a = ra.choice((1, 1, 2)) if kind in ("laser", "cannon") \
-                else ra.choice((2, 3, 4))
+            nb_a = rolled_a
         nb_a = max(1, min(4, int(nb_a)))
         if head_build == "cutter" and nb_a > 1:
             head_build = "gun"           # the cutting bar is one wide head
@@ -509,14 +550,26 @@ def build_turret(spec: TurretSpec) -> TurretModel:
             return _q(z0 + 0.12 * S)
 
         if mount == "under":             # heads slung under the wrist
-            bh2 = _q(max(0.06 * S, top_reach + 2 * step))
+            # the bracket covers the WHOLE head assembly and the heads sit
+            # centred mid-bracket: anchoring them to the bottom edge left
+            # the lower row of a 2x2 grid floating below the bracket, and
+            # capping the width by the boom cut off the outer heads
+            bh2 = _q(max(0.10 * S, 2 * top_reach + 2 * step))
             hy = _q(-wh2 - bh2)
-            brx = _q(min(bw * 0.9, span_x))
+            brx = _q(max(span_x, 0.08 * S))
             box(t.barrel, -brx, hy, zw - 0.05 * S, brx, -wh2, zw + 0.05 * S,
                 shade(hcol, 0.85))
-            e0, base_y = _q(zw + 0.05 * S), hy
+            e0, base_y = _q(zw + 0.05 * S), _q(-wh2 - bh2 / 2)
         else:                            # heads straight off the wrist
             e0, base_y = _q(zw + wh2), 0.0
+            if n_heads > 1:
+                # mounting plate: a row/grid reaches wider than the wrist
+                # drum and the outer heads lose face contact after snapping
+                pt_z = _q(e0 + max(0.03 * S, step))
+                py = _q(max(1.3 * er_n + 0.02 * S, 0.06 * S))
+                box(t.barrel, -_q(span_x), base_y - py, e0, _q(span_x),
+                    base_y + py, pt_z, shade(hcol, 0.85))
+                e0 = pt_z
 
         if head_build == "cutter":       # one wide cutting bar with glow lip
             cw2 = _q(bw * 1.15)
@@ -757,9 +810,10 @@ def build_turret(spec: TurretSpec) -> TurretModel:
 
     # ============================================================== barrel
     rr = _rng("barrel")
-    nb = spec.barrels if spec.barrels and spec.barrels > 0 else \
-        {"cannon": rr.choice((1, 1, 2)), "chaingun": rr.choice((2, 3, 4)),
-         "laser": 1, "railgun": 2, "launcher": rr.choice((2, 3, 4))}[kind]
+    # roll first, then override — a set slider must not reshuffle the rest
+    rolled_nb = {"cannon": rr.choice((1, 1, 2)), "chaingun": rr.choice((2, 3, 4)),
+                 "laser": 1, "railgun": 2, "launcher": rr.choice((2, 3, 4))}[kind]
+    nb = spec.barrels if spec.barrels and spec.barrels > 0 else rolled_nb
     nb = max(1, min(4, int(nb)))
     cal = _q({"cannon": 0.15, "chaingun": 0.085, "laser": 0.11,
               "railgun": 0.07, "launcher": 0.11}[kind] * S * (0.85 + 0.3 * rr.random()))

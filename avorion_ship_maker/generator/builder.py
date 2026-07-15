@@ -222,6 +222,14 @@ def _paint_hull(g: VoxelGrid, spec: ShipSpec, layout: str, rng: random.Random) -
         ncy = cy + yoff[sl]
         g.fill_tube(cx - off, ncy, p_hw, p_hh, 2.6, R_HULL, z0=sl.start)
         g.fill_tube(cx + off, ncy, p_hw, p_hh, 2.6, R_HULL, z0=sl.start)
+        # palm: a solid web across the prong roots — on thin hulls the slot
+        # floor (p_hw + 1.6) pushes the prongs clear off the body and the
+        # ship split into three pieces
+        for i in range(min(3, zc + 1 - sl.start)):
+            k = sl.start + i
+            g.paint_box((int(round(cx - off[i])), int(round(cx + off[i]))),
+                        (int(round(ncy[i] - p_hh[i])), int(round(ncy[i] + p_hh[i]))),
+                        (k, k), R_HULL, only_if_empty=True)
     elif layout == "keel":
         cym = cy + yoff - base_hh * 0.12
         g.fill_tube(cx, cym, hw, hh * 0.78, pexp, R_HULL, **belly(hh * 0.78, pexp))
@@ -692,7 +700,11 @@ def _cyber_trim(g: VoxelGrid, shell: np.ndarray, rng: random.Random) -> None:
     def lines(m):
         """Keep only voxels inside a z-run of >= 3 — long straight strips,
         no lone studs on every little step of the hull."""
-        return m & np.roll(m, 1, axis=2) & np.roll(m, -1, axis=2)
+        r_prev = np.roll(m, 1, axis=2)
+        r_prev[:, :, 0] = False          # no bow<->stern wraparound
+        r_next = np.roll(m, -1, axis=2)
+        r_next[:, :, -1] = False
+        return m & r_prev & r_next
 
     chine = lines(exp[3] & side & armr)           # top edge -> accent trim
     under = lines(exp[2] & side & armr) & ~chine  # belly edge -> underglow
