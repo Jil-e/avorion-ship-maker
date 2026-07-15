@@ -46,6 +46,48 @@ def save_xml(ship: ShipModel, path: str) -> str:
     return path
 
 
+def _plan_lines(blocks, indent: str) -> list[str]:
+    parents = build_parents(blocks)
+    lines = [f'{indent}<plan accumulateHealth="true" convex="false">']
+    for i, b in enumerate(blocks):
+        lines.append(f'{indent}\t<item parent="{parents[i]}" index="{i}">')
+        lines.append(f"{indent}\t\t{_block_tag(b)}")
+        lines.append(f"{indent}\t</item>")
+    lines.append(f"{indent}</plan>")
+    return lines
+
+
+def turret_to_xml(t) -> str:
+    """Serialize a :class:`TurretModel` to the game's <turret_design> format.
+
+    Matches the byte format of designs the game itself saves under
+    ``ships/auto-turrets`` (CRLF, tabs, section pivots, muzzle, version).
+    """
+    lines = [_HEADER,
+             f'<turret_design size="{fmt_num(t.size)}"'
+             f' coaxial="{"true" if t.coaxial else "false"}"'
+             f' shot_color="{t.shot_color}">']
+    sections = (("base", t.base, (0.0, 0.0, 0.0)),
+                ("body", t.body, t.body_pivot),
+                ("barrel", t.barrel, t.barrel_pivot))
+    for tag, blocks, (px, py, pz) in sections:
+        lines.append(f'\t<{tag} px="{fmt_num(px)}" py="{fmt_num(py)}" pz="{fmt_num(pz)}">')
+        lines.extend(_plan_lines(blocks, "\t\t"))
+        lines.append(f"\t</{tag}>")
+    mx, my, mz = t.muzzle
+    lines.append(f'\t<muzzlePosition x="{fmt_num(mx)}" y="{fmt_num(my)}" z="{fmt_num(mz)}"/>')
+    lines.append('\t<version major="2" minor="0" patch="0"/>')
+    lines.append("</turret_design>")
+    return _NL.join(lines) + _NL
+
+
+def save_turret_xml(t, path: str) -> str:
+    """Write a turret design to ``path`` (exact Avorion byte format)."""
+    with open(path, "wb") as fh:
+        fh.write(turret_to_xml(t).encode("utf-8"))
+    return path
+
+
 def parse_xml(path: str) -> ShipModel:
     """Parse an Avorion ship file into a :class:`ShipModel` (main hull plan only).
 

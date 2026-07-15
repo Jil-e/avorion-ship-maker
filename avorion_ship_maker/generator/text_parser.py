@@ -208,4 +208,17 @@ def parse_description(text: str) -> ShipSpec:
                 spec.engines = num
                 break
 
+    # turret count
+    if _has(t, ["no turrets", "без турел", "без оруд"]):
+        spec.turrets = 0
+    else:
+        tm = re.search(r"(\d+)\s*(?:turret|турел|оруд|пуш)", t)
+        if tm:
+            spec.turrets = int(tm.group(1))
+        else:
+            for word, num in _WORD_NUM.items():
+                if re.search(re.escape(word) + r"\s+(?:turret|турел|оруд|пуш)", t):
+                    spec.turrets = num
+                    break
+
     return spec

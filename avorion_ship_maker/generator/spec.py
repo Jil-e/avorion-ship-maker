@@ -17,15 +17,15 @@ from dataclasses import dataclass, field, replace
 # fields always override the roll.
 # length = Z (fore/aft), width = X (full, port-starboard), height = Y (full).
 HULL_CLASSES: dict[str, dict] = {
-    "fighter":    dict(length=(16, 26),  width=(10, 16), height=(6, 9),   engines=(1, 2), wings=0.95, fins=0.70, bridge=0.90, boxiness=(0.20, 0.55), nose=(0.35, 0.60), taper_tail=(0.08, 0.20)),
-    "corvette":   dict(length=(24, 38),  width=(12, 18), height=(7, 11),  engines=(1, 3), wings=0.85, fins=0.60, bridge=0.95, boxiness=(0.35, 0.65), nose=(0.30, 0.50), taper_tail=(0.08, 0.18)),
-    "frigate":    dict(length=(38, 56),  width=(13, 20), height=(10, 15), engines=(2, 3), wings=0.75, fins=0.35, bridge=0.95, boxiness=(0.45, 0.72), nose=(0.28, 0.48), taper_tail=(0.06, 0.14)),
-    "cruiser":    dict(length=(54, 80),  width=(17, 26), height=(12, 19), engines=(2, 4), wings=0.25, fins=0.60, bridge=0.95, boxiness=(0.55, 0.80), nose=(0.24, 0.42), taper_tail=(0.06, 0.14)),
-    "battleship": dict(length=(76, 110), width=(23, 34), height=(16, 25), engines=(3, 6), wings=0.10, fins=0.55, bridge=0.95, boxiness=(0.65, 0.88), nose=(0.20, 0.36), taper_tail=(0.05, 0.12)),
-    "freighter":  dict(length=(48, 76),  width=(18, 29), height=(16, 25), engines=(2, 4), wings=0.10, fins=0.15, bridge=0.90, boxiness=(0.78, 0.97), nose=(0.10, 0.28), taper_tail=(0.04, 0.10)),
-    "miner":      dict(length=(32, 52),  width=(14, 23), height=(12, 19), engines=(1, 3), wings=0.15, fins=0.20, bridge=0.90, boxiness=(0.60, 0.95), nose=(0.12, 0.35), taper_tail=(0.05, 0.14)),
-    "carrier":    dict(length=(68, 100), width=(25, 38), height=(15, 23), engines=(2, 4), wings=0.60, fins=0.20, bridge=0.90, boxiness=(0.70, 0.92), nose=(0.18, 0.34), taper_tail=(0.05, 0.12)),
-    "station":    dict(length=(30, 48),  width=(30, 48), height=(30, 48), engines=0,      wings=0.0,  fins=0.0,  bridge=0.0,  boxiness=(0.85, 1.0),  nose=(0.03, 0.10), taper_tail=(0.03, 0.10)),
+    "fighter":    dict(length=(16, 26),  width=(10, 16), height=(6, 9),   engines=(1, 2), turrets=(0, 1), wings=0.95, fins=0.70, bridge=0.90, boxiness=(0.20, 0.55), nose=(0.35, 0.60), taper_tail=(0.08, 0.20)),
+    "corvette":   dict(length=(24, 38),  width=(12, 18), height=(7, 11),  engines=(1, 3), turrets=(1, 2), wings=0.85, fins=0.60, bridge=0.95, boxiness=(0.35, 0.65), nose=(0.30, 0.50), taper_tail=(0.08, 0.18)),
+    "frigate":    dict(length=(38, 56),  width=(13, 20), height=(10, 15), engines=(2, 3), turrets=(2, 4), wings=0.75, fins=0.35, bridge=0.95, boxiness=(0.45, 0.72), nose=(0.28, 0.48), taper_tail=(0.06, 0.14)),
+    "cruiser":    dict(length=(54, 80),  width=(17, 26), height=(12, 19), engines=(2, 4), turrets=(3, 6), wings=0.25, fins=0.60, bridge=0.95, boxiness=(0.55, 0.80), nose=(0.24, 0.42), taper_tail=(0.06, 0.14)),
+    "battleship": dict(length=(76, 110), width=(23, 34), height=(16, 25), engines=(3, 6), turrets=(5, 9), wings=0.10, fins=0.55, bridge=0.95, boxiness=(0.65, 0.88), nose=(0.20, 0.36), taper_tail=(0.05, 0.12)),
+    "freighter":  dict(length=(48, 76),  width=(18, 29), height=(16, 25), engines=(2, 4), turrets=(1, 3), wings=0.10, fins=0.15, bridge=0.90, boxiness=(0.78, 0.97), nose=(0.10, 0.28), taper_tail=(0.04, 0.10)),
+    "miner":      dict(length=(32, 52),  width=(14, 23), height=(12, 19), engines=(1, 3), turrets=(1, 2), wings=0.15, fins=0.20, bridge=0.90, boxiness=(0.60, 0.95), nose=(0.12, 0.35), taper_tail=(0.05, 0.14)),
+    "carrier":    dict(length=(68, 100), width=(25, 38), height=(15, 23), engines=(2, 4), turrets=(3, 6), wings=0.60, fins=0.20, bridge=0.90, boxiness=(0.70, 0.92), nose=(0.18, 0.34), taper_tail=(0.05, 0.12)),
+    "station":    dict(length=(30, 48),  width=(30, 48), height=(30, 48), engines=0,      turrets=(2, 6), wings=0.0,  fins=0.0,  bridge=0.0,  boxiness=(0.85, 1.0),  nose=(0.03, 0.10), taper_tail=(0.03, 0.10)),
 }
 
 DEFAULT_CLASS = "frigate"
@@ -97,6 +97,7 @@ class ShipSpec:
 
     # parts
     engines: int | None = None
+    turrets: int | None = None          # dorsal turret-base pads (block 25)
     wings: bool | None = None
     wing_kind: str | None = None        # one of WING_KINDS; None => from seed
     fins: bool | None = None
@@ -155,6 +156,7 @@ class ShipSpec:
             bevel=float(self.bevel if self.bevel is not None else st.get("bevel", 0.85)),
             functional=float(self.functional if self.functional is not None else 0.5),
             engines=int(roll(self.engines, "engines", as_int=True)),
+            turrets=int(roll(self.turrets, "turrets", as_int=True)),
             wings=roll_part(self.wings, "wings"),
             fins=roll_part(self.fins, "fins"),
             bridge=roll_part(self.bridge, "bridge"),

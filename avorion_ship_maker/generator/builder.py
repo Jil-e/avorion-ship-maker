@@ -20,7 +20,7 @@ from .voxel import EMPTY, VoxelGrid, greedy_merge
 # ---- voxel role codes (internal) ---------------------------------------
 (R_HULL, R_ARMOR, R_ENGINE, R_ENGINE_GLOW, R_BRIDGE, R_WING, R_FIN,
  R_GLOW, R_ACCENT, R_GEN, R_GYRO, R_THRUST, R_CARGO, R_CREW,
- R_BATTERY, R_INTEGRITY, R_SHIELD, R_DIRTHRUST) = range(18)
+ R_BATTERY, R_INTEGRITY, R_SHIELD, R_DIRTHRUST, R_TURRET) = range(19)
 
 
 # ---- hull silhouette ----------------------------------------------------
@@ -313,6 +313,57 @@ def _hull_tops(g: VoxelGrid, xr, zr) -> dict[tuple[int, int], int]:
     return tops
 
 
+def _add_turret_mounts(g: VoxelGrid, spec: ShipSpec, hull: tuple[int, int],
+                       rng: random.Random) -> None:
+    """Turret-base pads (block type 25) on flat dorsal hull spots.
+
+    Each pad greedy-merges into a single block the game treats as a turret
+    socket. Odd counts get a centreline pad; the rest go on the port flank
+    and the symmetry pass mirrors them into port/starboard pairs.
+    """
+    n = max(int(spec.turrets), 0)
+    if n == 0:
+        return
+    hX, hY = hull
+    cx = (g.X - 1) // 2
+    p = max(1, min(3, hX // 9))          # pad edge length, voxels
+    ok_roles = (R_HULL, R_ARMOR)
+
+    def place(x0, x1, z0, z1):
+        """Put a pad on the footprint if it is on-hull and near-flat."""
+        tops = _hull_tops(g, (x0, x1), (z0, z1))
+        if len(tops) < (x1 - x0 + 1) * (z1 - z0 + 1):
+            return False
+        if max(tops.values()) - min(tops.values()) > 1:
+            return False
+        if any(g.role[x, t, k] not in ok_roles for (x, k), t in tops.items()):
+            return False
+        y = max(tops.values()) + 1
+        if y >= g.Y:
+            return False
+        g.paint_box((x0, x1), (y, y), (z0, z1), R_TURRET, only_if_empty=True)
+        return True
+
+    want_pairs = n // 2
+    want_center = n % 2
+    w2 = p // 2                          # centre pads span 2*w2+1 columns
+    for z0 in range(int(g.Z * 0.88) - p, int(g.Z * 0.22), -(p + 2)):
+        if want_center + want_pairs == 0:
+            break
+        z1 = z0 + p - 1
+        if want_center and place(cx - w2, cx + w2, z0, z1):
+            want_center = 0
+            continue
+        if want_pairs:
+            row = np.where(g.occ[:, :, z0].any(axis=1))[0]
+            if not len(row):
+                continue
+            half_w = min(cx - int(row[0]), hX * 0.5)
+            x1 = cx - max(2, int(half_w * 0.5))
+            if place(x1 - p + 1, x1, z0, z1):
+                want_pairs -= 1
+
+
 # wing archetypes, modelled on classic sci-fi silhouettes:
 #   swept   — planar swept-back wings, sometimes slight di-/anhedral (SC Sabre/Gladius)
 #   forward — forward-swept raider look
@@ -522,6 +573,7 @@ def _attr_table(spec: ShipSpec) -> dict[int, tuple[int, str, int, int]]:
         R_INTEGRITY:   (index_for(Role.INTEGRITY), A(shade(sec, 0.5)), 0, m),
         R_SHIELD:      (index_for(Role.SHIELD), A(mix(sec, glow, 0.3)), 0, max(2, m)),
         R_DIRTHRUST:   (index_for(Role.DIR_THRUSTER), A(shade(sec, 0.45)), 0, m),
+        R_TURRET:      (index_for(Role.TURRET_BASE), A(shade(prim, 1.45)), 1, m),
     }
 
 
@@ -675,7 +727,8 @@ def build_ship(spec: ShipSpec) -> ShipModel:
     # wings may tilt (di-/anhedral, x-foils) or end in winglets — reserve height
     wing_pad_y = (int(round(wing_span * 0.8)) + max(2, hY // 2)) if spec.wings else 0
     pad_y = max(fin_h if spec.fins else 0, cab_h if spec.bridge else 0,
-                max(2, hY // 3) if layout == "keel" else 0, wing_pad_y)
+                max(2, hY // 3) if layout == "keel" else 0, wing_pad_y,
+                1 if spec.turrets else 0)   # turret pads sit 1 voxel above the hull
     X = hX + 2 * pad_x
     Y = hY + 2 * pad_y   # symmetric so the hull stays centred in the grid
     g = VoxelGrid(X, Y, Z)
@@ -686,6 +739,7 @@ def build_ship(spec: ShipSpec) -> ShipModel:
     _add_bridge(g, spec, (hX, hY), cab_h, _rng("bridge"))
     _add_wings(g, spec, wing_span, (hX, hY), _rng("wings"))
     _add_fins(g, spec, fin_h, (hX, hY), _rng("fins"))
+    _add_turret_mounts(g, spec, (hX, hY), _rng("turrets"))
 
     _enforce_symmetry(g)
     _resolve_roles(g, spec, _rng("detail"))
