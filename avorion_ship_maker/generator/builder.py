@@ -41,8 +41,8 @@ _LAYOUT_WEIGHTS = {
     "frigate":    (("mono", 3), ("pods", 3), ("keel", 2), ("twin", 1), ("fork", 2), ("hammer", 1)),
     "cruiser":    (("mono", 3), ("keel", 3), ("pods", 2), ("twin", 1), ("hammer", 2), ("fork", 1)),
     "battleship": (("mono", 3), ("keel", 4), ("pods", 1), ("twin", 1), ("hammer", 3)),
-    "freighter":  (("mono", 3), ("twin", 3), ("keel", 2), ("pods", 1), ("hammer", 2)),
-    "miner":      (("mono", 3), ("twin", 2), ("keel", 2), ("pods", 2), ("hammer", 1), ("fork", 3)),
+    "freighter":  (("mono", 3), ("twin", 3), ("keel", 2), ("pods", 1), ("hammer", 2), ("crab", 2)),
+    "miner":      (("mono", 2), ("twin", 2), ("keel", 2), ("pods", 2), ("hammer", 1), ("fork", 3), ("crab", 4)),
     "carrier":    (("mono", 2), ("pods", 4), ("twin", 2), ("keel", 1), ("hammer", 3)),
     "station":    (("mono", 1),),
 }
@@ -230,6 +230,41 @@ def _paint_hull(g: VoxelGrid, spec: ShipSpec, layout: str, rng: random.Random) -
             g.paint_box((int(round(cx - off[i])), int(round(cx + off[i]))),
                         (int(round(ncy[i] - p_hh[i])), int(round(ncy[i] + p_hh[i]))),
                         (k, k), R_HULL, only_if_empty=True)
+    elif layout == "crab":
+        # industrial crab: a broad flat carapace aft + two claw arms that
+        # converge toward the bow like pincers (mining-rig look)
+        zc = int(Z * (0.52 + 0.10 * rng.random()))     # carapace front
+        body = slice(0, zc + 1)
+        g.fill_tube(cx, cy + yoff[body],
+                    np.maximum(hw[body], base_hw * 0.80),
+                    np.maximum(hh[body] * 0.82, 1.2), pexp[body] + 2.0,
+                    R_HULL, **belly(np.maximum(hh[body] * 0.82, 1.2),
+                                    pexp[body] + 2.0))
+        sl = slice(max(0, int(zc - Z * 0.08)), Z)
+        n = Z - sl.start
+        t = np.linspace(0.0, 1.0, max(n, 2))
+        c_hw = np.maximum(hw[sl] * 0.26, 1.2)          # claw thickness
+        # shoulders wide at the root, pincer tips converging near the bow
+        conv = 0.30 + 0.12 * rng.random()
+        off = base_hw * (0.80 - conv * t ** 0.8)
+        c_hh = np.maximum(hh[sl] * 0.50, 1.0)
+        ccy = cy + yoff[sl] - hh[sl] * (0.10 + 0.15 * t)   # claws sag forward
+        # freeze the sag over the pincer tip: the slit-cut jaws must line
+        # up slice to slice or the lower jaw ends up floating
+        jaw = max(2, int(Z * 0.07))
+        ccy[max(0, n - jaw - 1):] = ccy[max(0, n - jaw - 1)]
+        g.fill_tube(cx - off, ccy, c_hw, c_hh, 2.4, R_HULL, z0=sl.start)
+        g.fill_tube(cx + off, ccy, c_hw, c_hh, 2.4, R_HULL, z0=sl.start)
+        # pincer tips: a horizontal slit splits each claw into open jaws
+        for i in range(max(0, n - jaw), n):
+            k = sl.start + i
+            for sgn in (-1, 1):
+                xc = cx + sgn * off[i]
+                x0 = max(0, int(round(xc - c_hw[i])))
+                x1 = min(g.X - 1, int(round(xc + c_hw[i])))
+                yj = int(round(ccy[i]))
+                if 0 <= yj < g.Y:
+                    g.occ[x0:x1 + 1, yj, k] = False
     elif layout == "keel":
         cym = cy + yoff - base_hh * 0.12
         g.fill_tube(cx, cym, hw, hh * 0.78, pexp, R_HULL, **belly(hh * 0.78, pexp))
@@ -397,9 +432,82 @@ def _add_turret_mounts(g: VoxelGrid, spec: ShipSpec, hull: tuple[int, int],
 #   xfoil   — two angled blades per side, X from the front (X-wing / Buccaneer)
 #   tipfin  — swept wing ending in a vertical winglet (Gladius / Cutlass)
 #   tippod  — wing carrying an engine/weapon pod on the tip (Hornet / Firefly)
+#   vpods   — not wings at all: stubby angled pylons carrying functional
+#             module pods, engines first (Serenity / podracer outriggers)
 _WING_KINDS = {"swept": 4, "forward": 2, "delta": 3, "gull": 3,
-               "xfoil": 2, "tipfin": 3, "tippod": 2}
-_WING_KINDS_UTILITY = {"swept": 4, "delta": 2, "tipfin": 2, "tippod": 3}
+               "xfoil": 2, "tipfin": 3, "tippod": 2, "vpods": 3}
+_WING_KINDS_UTILITY = {"swept": 3, "delta": 2, "tipfin": 2, "tippod": 3,
+                       "vpods": 5}
+
+
+def _add_pylon_pods(g: VoxelGrid, spec: ShipSpec, span: int,
+                    hull: tuple[int, int], rng: random.Random) -> None:
+    """Engine outriggers (the Serenity / podracer reference): not lifting
+    wings but stubby pylons — planar, V or Λ — carrying an axis-aligned
+    functional module pod. Combat hulls get engine nacelles with a glowing
+    exhaust; utility hulls may roll a generator or cargo pod instead."""
+    hX, hY = hull
+    cy = (g.Y - 1) // 2
+    Z = g.Z
+
+    p_len = max(5, int(Z * (0.24 + 0.12 * rng.random())))   # pod length
+    z_mid = int(Z * (0.28 + 0.20 * rng.random()))           # pylon station
+    chord = max(3, int(Z * 0.10))
+    z0 = max(0, z_mid - chord // 2)
+    z1 = min(Z - 1, z0 + chord - 1)
+
+    # attach to the widest flank over the pylon chord
+    rootL = rootR = None
+    for k in range(z0, z1 + 1):
+        row = np.where(g.occ[:, cy, k])[0]
+        if len(row):
+            rootL = int(row[0]) if rootL is None else min(rootL, int(row[0]))
+            rootR = int(row[-1]) if rootR is None else max(rootR, int(row[-1]))
+    if rootL is None:
+        return
+
+    reach = max(3, int(span * (0.45 + 0.30 * rng.random())))   # strut length
+    y_cap = max(2.0, hY * 0.55)
+    slope = rng.choice((-1, -1, 1, 0)) * (0.35 + 0.50 * rng.random())
+    slope = float(np.clip(slope, -y_cap / reach, y_cap / reach))
+    th = max(2, hY // 6)                                       # strut thickness
+
+    dy = 0
+    for s in range(reach):                                     # the pylons
+        # dy starts at ZERO: the flank was probed at cy, and the outermost
+        # hull column often exists only there — starting one row off left
+        # the whole strut+pod assembly floating
+        dy = int(round(slope * s))
+        for side, root in ((-1, rootL), (1, rootR)):
+            x = root + side * (s + 1)
+            g.paint_box((x, x), (cy + dy - th // 2, cy + dy + (th - 1) - th // 2),
+                        (z0, z1), R_WING, only_if_empty=True)
+
+    # the module pod, flush against the pylon tip, aligned with the hull
+    pw = max(1, int(round(hY * 0.14 + 0.6)))                   # pod half-size
+    pod_z0 = max(0, z_mid - int(p_len * (0.40 + 0.25 * rng.random())))
+    pod_z1 = min(Z - 1, pod_z0 + p_len - 1)
+    pcy = cy + dy
+    content = "engine"
+    if spec.hull_class in ("freighter", "miner", "carrier"):
+        content = rng.choice(("engine", "engine", "gen", "cargo"))
+    core = {"engine": R_ENGINE, "gen": R_GEN, "cargo": R_CARGO}[content]
+    for side, root in ((-1, rootL), (1, rootR)):
+        px0 = root + side * (reach + 1)                        # pod inner face
+        pxa, pxb = sorted((px0, px0 + side * 2 * pw))
+        # hull-coloured cowling with the functional module as its core
+        g.paint_box((pxa, pxb), (pcy - pw, pcy + pw), (pod_z0, pod_z1),
+                    R_HULL, only_if_empty=True)
+        if content == "engine":                                # glowing exhaust
+            g.paint_box((pxa + 1, pxb - 1), (pcy - pw + 1, pcy + pw - 1),
+                        (pod_z0, pod_z1 - 1), core)
+            g.paint_box((pxa, pxb), (pcy - pw, pcy + pw), (pod_z0, pod_z0),
+                        R_ENGINE_GLOW)
+        else:
+            g.paint_box((pxa + 1, pxb - 1), (pcy - pw + 1, pcy + pw - 1),
+                        (pod_z0 + 1, pod_z1 - 1), core)
+            g.paint_box((pxa, pxb), (pcy - pw, pcy + pw),      # accent collar
+                        (pod_z1 - 1, pod_z1 - 1), R_ACCENT)
 
 
 def _add_wings(g: VoxelGrid, spec: ShipSpec, span: int, hull: tuple[int, int],
@@ -416,6 +524,10 @@ def _add_wings(g: VoxelGrid, spec: ShipSpec, span: int, hull: tuple[int, int],
                  if spec.hull_class in ("freighter", "miner", "carrier", "station")
                  else _WING_KINDS)
         kind = rng.choices(list(table), weights=list(table.values()))[0]
+
+    if kind == "vpods":                    # module outriggers, not wings
+        _add_pylon_pods(g, spec, span, hull, rng)
+        return
 
     z0 = int(g.Z * (0.20 + 0.16 * rng.random()))       # root trailing edge
     chord = max(4, int(g.Z * (0.22 + 0.18 * rng.random())))
@@ -635,6 +747,37 @@ def _add_mining_rig(g: VoxelGrid, spec: ShipSpec, hull: tuple[int, int],
                     g.paint_box((row[0] - 1, row[0] - 1), (j, j), (k, k),
                                 R_ACCENT if j == jm else R_FIN,
                                 only_if_empty=True)
+
+
+def _keep_main_component(g: VoxelGrid) -> None:
+    """Keep only the voxel component containing the hull core.
+
+    Carving and part placement on extreme rolls can strand fragments (a
+    pincer jaw, a clipped pod); a multi-piece ship is invalid in game, so
+    anything not attached to the main hull is dropped — the same guarantee
+    _drop_floaters gives turret sections."""
+    occ = g.occ
+    if not occ.any():
+        return
+    idx = np.argwhere(occ)
+    ctr = np.array([g.X / 2.0, g.Y / 2.0, g.Z / 2.0])
+    seed = idx[int(np.argmin(np.abs(idx - ctr).sum(axis=1)))]
+    region = np.zeros_like(occ)
+    region[tuple(seed)] = True
+    while True:
+        grown = region
+        for axis in (0, 1, 2):
+            for shift in (1, -1):
+                r = np.roll(region, shift, axis=axis)
+                sl = [slice(None)] * 3
+                sl[axis] = 0 if shift == 1 else -1
+                r[tuple(sl)] = False
+                grown = grown | r
+        grown &= occ
+        if grown.sum() == region.sum():
+            break
+        region = grown
+    g.occ &= region
 
 
 def _enforce_symmetry(g: VoxelGrid) -> None:
@@ -901,7 +1044,9 @@ def build_ship(spec: ShipSpec) -> ShipModel:
     cab_h = max(2, hY // 3)
     # miners carry external rig gear (shoulders/blade/skirts) — reserve room
     rig_pad = (2, max(4, hY // 6 + 2)) if spec.hull_class == "miner" else (0, 0)
-    pad_x = max(wing_span if spec.wings else 0, rig_pad[0])
+    # vpods module pods stick past the strut tip — reserve extra width
+    pad_x = max((wing_span + max(3, int(hY * 0.3) + 2)) if spec.wings else 0,
+                rig_pad[0])
     # wings may tilt (di-/anhedral, x-foils) or end in winglets — reserve height
     wing_pad_y = (int(round(wing_span * 0.8)) + max(2, hY // 2)) if spec.wings else 0
     pad_y = max(fin_h if spec.fins else 0, cab_h if spec.bridge else 0,
@@ -921,6 +1066,7 @@ def build_ship(spec: ShipSpec) -> ShipModel:
     _add_mining_rig(g, spec, (hX, hY), layout, _rng("rig"))
     _add_turret_mounts(g, spec, (hX, hY), _rng("turrets"))
 
+    _keep_main_component(g)
     _enforce_symmetry(g)
     _resolve_roles(g, spec, _rng("detail"))
     _functional(g, spec)

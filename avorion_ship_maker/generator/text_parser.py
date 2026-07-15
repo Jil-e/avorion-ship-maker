@@ -29,7 +29,8 @@ LAYOUT_KEYWORDS: dict[str, list[str]] = {
     "pods": ["гондол", "nacelle", "пилон"],
     "keel": ["надстройк", "гребен", "гребн", "superstructure"],
     "hammer": ["молот", "hammerhead", "широкий нос", "т-обра"],
-    "fork": ["вилк", "раздвоен", "клешн", "forked", "prong"],
+    "fork": ["вилк", "раздвоен", "forked", "prong"],
+    "crab": ["краб", "crab", "клешн", "claw"],
     "mono": ["монокорпус", "monohull", "один корпус"],
 }
 
@@ -40,6 +41,8 @@ WING_KIND_KEYWORDS: dict[str, list[str]] = {
     "xfoil": ["x-wing", "xfoil", "икс-крыл", "x-обра"],
     "tipfin": ["винглет", "winglet"],
     "tippod": ["гондолы на крыл", "на концах крыл"],
+    "vpods": ["пилон", "pylon", "аутригер", "outrigger", "двигатели на крыл",
+              "секции двигат"],
 }
 
 STYLE_KEYWORDS: dict[str, list[str]] = {

@@ -61,14 +61,16 @@ STYLES: dict[str, dict] = {
 DEFAULT_STYLE = "military"
 
 # hull layout archetypes (None/auto => picked from the seed, weighted by class)
-LAYOUTS: tuple[str, ...] = ("mono", "twin", "pods", "keel", "hammer", "fork")
+LAYOUTS: tuple[str, ...] = ("mono", "twin", "pods", "keel", "hammer", "fork",
+                            "crab")
 LAYOUT_NAMES = {"mono": "монокорпус", "twin": "катамаран",
                 "pods": "гондолы", "keel": "надстройка",
-                "hammer": "молот (широкий нос)", "fork": "вилка (раздвоенный нос)"}
+                "hammer": "молот (широкий нос)", "fork": "вилка (раздвоенный нос)",
+                "crab": "краб (клешни)"}
 
 # wing archetypes (None/auto => picked from the seed; see builder._WING_KINDS)
 WING_KINDS: tuple[str, ...] = ("swept", "forward", "delta", "gull",
-                               "xfoil", "tipfin", "tippod")
+                               "xfoil", "tipfin", "tippod", "vpods")
 
 
 @dataclass
