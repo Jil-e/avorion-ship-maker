@@ -427,6 +427,13 @@ def _add_wings(g: VoxelGrid, spec: ShipSpec, span: int, hull: tuple[int, int],
         blades = (rng.choice((-1, 0, 0, 1)) * 0.25 * rng.random(),)
     knee = 0.35 + 0.25 * rng.random()                  # gull: kink along the span
 
+    # vertical reach follows the HULL height, not the span: a flattened ship
+    # must not sprout wings taller than itself (the height slider otherwise
+    # looks dead — the ship's bbox stayed pinned by the tilted wings)
+    y_cap = max(2.0, hY * 0.55)
+    blades = tuple(float(np.clip(b, -y_cap / span, y_cap / span))
+                   for b in blades)
+
     # solid plane: adjacent columns must overlap well, so cap the sweep rate
     sweep = float(np.clip(sweep, -span * 0.7, span * 0.7))
 
@@ -519,7 +526,7 @@ def _add_fins(g: VoxelGrid, spec: ShipSpec, fin_h: int, hull: tuple[int, int],
 
 
 def _add_mining_rig(g: VoxelGrid, spec: ShipSpec, hull: tuple[int, int],
-                    rng: random.Random) -> None:
+                    layout: str, rng: random.Random) -> None:
     """Miner identity: heavy-machinery language (CAT vibes, per the user's
     reference) — reinforced shoulder pedestals with turret pads where the
     manipulator arms plug in, a ventral dozer blade with a hazard-striped
@@ -569,26 +576,38 @@ def _add_mining_rig(g: VoxelGrid, spec: ShipSpec, hull: tuple[int, int],
                     (kz - p, kz + p), R_TURRET)          # the arm's pad
         break
 
-    if rng.random() < 0.75:
-        # ventral dozer blade under the bow, two plates thick, with an
-        # alternating hazard lip like a CAT bucket edge
-        z0 = int(Z * 0.68)
-        z1 = min(Z - 1, int(Z * 0.94))
+    if rng.random() < 0.75 and layout != "fork":
+        # ventral dozer blade, two plates thick, with an alternating hazard
+        # lip like a CAT bucket edge. It runs ONLY along the flat wide
+        # stretch of the belly ahead of midships — following a rising bow
+        # made it climb the nose like a jagged staircase, and under a fork
+        # it hung across the slot between the prongs.
         w = max(2, int(hX * 0.40))
-        jb = None
-        for k in range(z0, z1 + 1):
-            bots = [c[0] for x in range(cx - w, cx + w + 1)
-                    for c in (np.where(g.occ[x, :, k])[0],) if len(c)]
-            if not bots:
-                continue
-            jb = min(bots)
-            g.paint_box((cx - w, cx + w), (jb - 2, jb - 1), (k, k), R_FIN,
-                        only_if_empty=True)
-        if jb is not None:               # striped cutting lip, one lower
-            for i, x in enumerate(range(cx - w, cx + w + 1)):
-                role = R_ACCENT if (i // 2) % 2 == 0 else R_FIN
-                g.paint_box((x, x), (jb - 3, jb - 3), (z1 - 1, z1), role,
-                            only_if_empty=True)
+        jmid = (Y - 1) // 2
+        belly = {}
+        for k in range(int(Z * 0.45), Z):
+            col = np.where(g.occ[cx, :, k])[0]
+            row = np.where(g.occ[:, jmid, k])[0]
+            if len(col) and len(row) and (cx - row[0]) >= max(2, int(w * 0.8)):
+                belly[k] = int(col[0])
+        run = {k for k, j in belly.items()
+               if belly and j <= min(belly.values()) + 1}
+        if run:
+            end = max(run)               # forward-most contiguous stretch
+            start = end
+            while start - 1 in run:
+                start -= 1
+            start = max(start, end - max(5, int(Z * 0.22)))
+            if end - start >= 3:
+                for k in range(start, end + 1):
+                    jb = belly[k]
+                    g.paint_box((cx - w, cx + w), (jb - 2, jb - 1), (k, k),
+                                R_FIN, only_if_empty=True)
+                jb = belly[end]          # striped cutting lip at the front
+                for i, x in enumerate(range(cx - w, cx + w + 1)):
+                    role = R_ACCENT if (i // 2) % 2 == 0 else R_FIN
+                    g.paint_box((x, x), (jb - 3, jb - 3), (end - 1, end),
+                                role, only_if_empty=True)
 
     if rng.random() < 0.6:
         # low armour skirts hugging the lower flanks (bumper plates), with
@@ -885,7 +904,7 @@ def build_ship(spec: ShipSpec) -> ShipModel:
     _add_bridge(g, spec, (hX, hY), cab_h, _rng("bridge"))
     _add_wings(g, spec, wing_span, (hX, hY), _rng("wings"))
     _add_fins(g, spec, fin_h, (hX, hY), _rng("fins"))
-    _add_mining_rig(g, spec, (hX, hY), _rng("rig"))
+    _add_mining_rig(g, spec, (hX, hY), layout, _rng("rig"))
     _add_turret_mounts(g, spec, (hX, hY), _rng("turrets"))
 
     _enforce_symmetry(g)
