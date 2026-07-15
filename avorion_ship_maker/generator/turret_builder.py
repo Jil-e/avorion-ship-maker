@@ -246,8 +246,7 @@ def build_turret(spec: TurretSpec) -> TurretModel:
     # mining-manipulator look from the reference: shoulder tower with a
     # clevis, an elbow hinge drum, and the whole forearm as the elevating
     # barrel section — in game the elbow really nods
-    arm_ok = kind == "laser" and (spec.barrels is None or int(spec.barrels or 0) <= 1)
-    if arm_ok and _rng("armroll").random() < 0.65:
+    if kind == "laser" and _rng("armroll").random() < 0.65:
         ra = _rng("arm")
         hcol = ra.choice((prim, shade(prim, 0.88), mix(prim, sec, 0.35)))
         aw = _q(0.16 * S * (0.85 + 0.3 * ra.random()))     # shoulder half-width
@@ -278,10 +277,17 @@ def build_turret(spec: TurretSpec) -> TurretModel:
                 s * (aw + ct + 0.012 * S), ye + 0.035 * S, 0.035 * S, acc)
 
         # ---- forearm = the elevating section, pivot at the elbow --------
-        # its own rolls: boom build, head mount, counterweight
+        # its own rolls: boom build, fake mid-joint, head build x mount,
+        # 1-4 emitters/guns (row, or a 2x2 block for four)
         t.barrel_pivot = (0.0, ye, 0.0)
         boom_kind = ra.choice(("solid", "twin"))
-        head_kind = ra.choice(("inline", "under"))
+        mount = ra.choice(("inline", "under"))
+        head_build = ra.choice(("stub", "gun", "gun", "cutter"))
+        nb_a = spec.barrels if spec.barrels and spec.barrels > 0 else \
+            ra.choice((1, 1, 2))
+        nb_a = max(1, min(4, int(nb_a)))
+        if head_build == "cutter" and nb_a > 1:
+            head_build = "gun"           # the cutting bar is one wide head
         wh = _q(0.11 * S)
         octo_x(t.barrel, -aw, aw, 0, 0, wh, shade(prim, 0.85))   # hinge hub
         if ra.random() < 0.7:                                    # counterweight
@@ -291,17 +297,30 @@ def build_turret(spec: TurretSpec) -> TurretModel:
         bw = _q(aw * 0.75)
         alen = _q((0.45 + 0.55 * ra.random()) * S)
         z_b1 = _q(wh + alen)
+        # fake second joint: a knuckle plate across the middle of the boom
+        jz = _q(wh + alen * (0.45 + 0.15 * ra.random())) \
+            if boom_kind == "solid" and ra.random() < 0.5 else None
         if boom_kind == "twin":                                  # two rails
             rt = _q(max(bw * 0.42, 2 * step))
             for s in (1, -1):
-                box(t.barrel, s * (bw - rt) if s > 0 else -bw, -bh, wh,
-                    s * bw if s > 0 else -(bw - rt), bh, z_b1, hcol)
+                box(t.barrel, s * (bw - rt), -bh, wh, s * bw, bh, z_b1, hcol)
             box(t.barrel, -bw * 0.9, bh, wh + 0.06 * S, bw * 0.9,
                 bh + 0.015 * S, z_b1 - 0.06 * S, glow, idx=_GLOW)
         else:                                                    # solid boom
             box(t.barrel, -bw, -bh, wh, bw, bh, z_b1, hcol)
-            box(t.barrel, -0.03 * S, bh, wh + 0.06 * S, 0.03 * S,
-                bh + 0.015 * S, z_b1 - 0.06 * S, glow, idx=_GLOW)
+            g0, g1 = _q(wh + 0.06 * S), _q(z_b1 - 0.06 * S)
+            if jz is not None:           # glow line parts around the knuckle
+                box(t.barrel, -0.03 * S, bh, g0, 0.03 * S, bh + 0.015 * S,
+                    jz - 0.05 * S, glow, idx=_GLOW)
+                box(t.barrel, -0.03 * S, bh, jz + 0.05 * S, 0.03 * S,
+                    bh + 0.015 * S, g1, glow, idx=_GLOW)
+                box(t.barrel, -bw * 0.85, bh, jz - 0.04 * S, bw * 0.85,
+                    bh + 0.05 * S, jz + 0.04 * S, shade(hcol, 0.9))
+                box(t.barrel, -bw * 0.3, bh + 0.05 * S, jz - 0.04 * S,
+                    bw * 0.3, bh + 0.062 * S, jz + 0.04 * S, acc)
+            else:
+                box(t.barrel, -0.03 * S, bh, g0, 0.03 * S, bh + 0.015 * S,
+                    g1, glow, idx=_GLOW)
             for s in (1, -1):                                    # side plates
                 box(t.barrel, s * bw, -bh * 0.6, wh + 0.08 * S,
                     s * (bw + 0.015 * S), bh * 0.6, z_b1 - 0.08 * S,
@@ -311,23 +330,67 @@ def build_turret(spec: TurretSpec) -> TurretModel:
         wh2 = _q(max(bh * 1.4, 0.08 * S))                        # wrist drum
         zw = _q(z_b1 + wh2)
         octo_x(t.barrel, -bw * 0.9, bw * 0.9, 0, zw, wh2, shade(prim, 0.85))
+
+        # emitter layout: a row, or a 2x2 block for four
         er = _q(wh2 * 0.7)
-        if head_kind == "under":         # emitter slung under the wrist
-            bh2 = _q(max(0.06 * S, er + step))   # keep the head clear of it
-            hy = _q(-wh2 - bh2)
-            box(t.barrel, -bw * 0.5, hy, zw - 0.05 * S, bw * 0.5, -wh2,
-                zw + 0.05 * S, shade(hcol, 0.85))
-            e0 = _q(zw + 0.05 * S)
-            octo_z(t.barrel, 0, hy, e0, e0 + 0.07 * S, er, ring_col, cut=0.3)
-            octo_z(t.barrel, 0, hy, e0 + 0.07 * S, e0 + 0.12 * S, er * 0.55,
+        er_n = _q(max(min(er, {1: 1.0, 2: 0.42, 3: 0.26, 4: 0.40}[nb_a] * bw),
+                      3 * step))
+        ps = _q(2.6 * er_n)
+        offs = {1: ((0, 0),), 2: ((-0.5, 0), (0.5, 0)),
+                3: ((-1, 0), (0, 0), (1, 0)),
+                4: ((-0.5, -1.3), (0.5, -1.3), (-0.5, 1.3), (0.5, 1.3))}[nb_a]
+
+        def laser_gun(x, yy, z0, glen, c):
+            """A proper little laser gun: dish, cone, ringed tube, glow tip."""
+            m1 = _q(z0 + 0.10 * S)
+            octo_z(t.barrel, x, yy, z0, m1, c * 1.5, prim)
+            octo_taper(t.barrel, x, yy, m1, _q(m1 + 0.03 * S), c * 1.5,
+                       c * 0.7, prim)
+            zr1 = _q(z0 + glen * 0.45)
+            box(t.barrel, x - c * 0.7, yy - c * 0.7, m1, x + c * 0.7,
+                yy + c * 0.7, zr1, barrel_metal)
+            zr2 = _q(zr1 + 0.035 * S)
+            octo_z(t.barrel, x, yy, zr1, zr2, c * 1.1, ring_col)
+            ze = _q(z0 + glen)
+            box(t.barrel, x - c * 0.7, yy - c * 0.7, zr2, x + c * 0.7,
+                yy + c * 0.7, ze, barrel_metal)
+            octo_z(t.barrel, x, yy, ze, _q(ze + 0.06 * S), c * 0.85,
                    glow, idx=_GLOW)
-            t.muzzles = [(0.0, hy, _q(e0 + 0.12 * S))]
-        else:                            # emitter straight off the wrist
-            e_end = _q(zw + wh2)
-            octo_z(t.barrel, 0, 0, e_end, e_end + 0.07 * S, er, ring_col, cut=0.3)
-            octo_z(t.barrel, 0, 0, e_end + 0.07 * S, e_end + 0.12 * S,
-                   er * 0.55, glow, idx=_GLOW)
-            t.muzzles = [(0.0, 0.0, _q(e_end + 0.12 * S))]
+            return _q(ze + 0.06 * S)
+
+        def head_stub(x, yy, z0):
+            octo_z(t.barrel, x, yy, z0, z0 + 0.07 * S, er_n, ring_col, cut=0.3)
+            octo_z(t.barrel, x, yy, z0 + 0.07 * S, z0 + 0.12 * S, er_n * 0.55,
+                   glow, idx=_GLOW)
+            return _q(z0 + 0.12 * S)
+
+        if mount == "under":             # heads slung under the wrist
+            top_reach = (1.3 + 1.125) * er_n if nb_a == 4 else 1.125 * er_n
+            bh2 = _q(max(0.06 * S, top_reach + 2 * step))
+            hy = _q(-wh2 - bh2)
+            brx = _q(min(bw * 0.9, max(abs(o[0]) * ps for o in offs) + er_n))
+            box(t.barrel, -brx, hy, zw - 0.05 * S, brx, -wh2, zw + 0.05 * S,
+                shade(hcol, 0.85))
+            e0, base_y = _q(zw + 0.05 * S), hy
+        else:                            # heads straight off the wrist
+            e0, base_y = _q(zw + wh2), 0.0
+
+        if head_build == "cutter":       # one wide cutting bar with glow lip
+            cw2 = _q(bw * 1.15)
+            octo_x(t.barrel, -cw2, cw2, base_y, _q(e0 + er), er,
+                   shade(prim, 0.9))
+            box(t.barrel, -cw2 * 0.85, base_y - 0.025 * S, _q(e0 + 2 * er),
+                cw2 * 0.85, base_y + 0.025 * S, _q(e0 + 2 * er + 0.015 * S),
+                glow, idx=_GLOW)
+            t.muzzles = [(0.0, base_y, _q(e0 + 2 * er + 0.015 * S))]
+        else:
+            t.muzzles = []
+            glen = _q((0.35 + 0.25 * ra.random()) * S)
+            for fx, fy in offs:
+                hx, hyy = _q(fx * ps), _q(base_y + fy * er_n)
+                tip = laser_gun(hx, hyy, e0, glen, er_n * 0.75) \
+                    if head_build == "gun" else head_stub(hx, hyy, e0)
+                t.muzzles.append((hx, hyy, tip))
         return t
 
     # =============================================================== body
