@@ -84,7 +84,10 @@ def _hull_arrays(spec: ShipSpec, rng: random.Random):
     Z = spec.length
     base_hw = max((spec.width - 1) / 2.0, 1.0)
     base_hh = max((spec.height - 1) / 2.0, 1.0)
+    cyber = spec.style == "cyberpunk"
     box = float(np.clip(spec.boxiness, 0, 1))
+    if cyber:                            # CP2077: slab-sided, no soft curves
+        box = max(box, 0.85)
 
     # longitudinal segments
     nseg = int(np.clip(2 + Z // 16 + rng.randint(0, 1), 2, 5))
@@ -124,6 +127,15 @@ def _hull_arrays(spec: ShipSpec, rng: random.Random):
     # it rounds to lone one-voxel bumps that read as glitches)
     bulge = 0.03 + 0.05 * rng.random()
     hw = hw * ((1 - bulge) + bulge * np.sin(np.pi * zc))
+    if cyber:
+        # facet the profiles into wide flat bands with hard steps — the
+        # smooth taper otherwise reads as a 1-voxel staircase, not CP2077
+        qw = max(1.5, base_hw * 0.16)
+        qh = max(1.5, base_hh * 0.16)
+        hw = np.maximum(np.round(hw / qw) * qw, 1.0)
+        hh = np.maximum(np.round(hh / qh) * qh, 1.0)
+        yoff = np.round(yoff)            # flat decks, no vertical drift
+        pexp = np.full_like(pexp, 9.0)   # hard rectangular cross-section
     return hw, hh, yoff, pexp
 
 
@@ -504,6 +516,77 @@ def _add_fins(g: VoxelGrid, spec: ShipSpec, fin_h: int, hull: tuple[int, int],
             g.paint_box((x, x), (top + 1, top + h), (k, k), R_FIN, only_if_empty=True)
 
 
+def _add_mining_rig(g: VoxelGrid, spec: ShipSpec, hull: tuple[int, int],
+                    rng: random.Random) -> None:
+    """Miner identity kit: per-seed industrial gear — a dorsal gantry crane,
+    flank silo tanks, a ventral scoop — so no two miners read as the same
+    grey box with a cab."""
+    if spec.hull_class != "miner":
+        return
+    hX, hY = hull
+    X, Y, Z = g.X, g.Y, g.Z
+    cx = (X - 1) // 2
+    feats = rng.sample(("crane", "tanks", "scoop"), k=rng.choice((1, 2, 2)))
+
+    if "crane" in feats:
+        # gantry over the working deck: two portal frames + rails between
+        k1 = int(Z * (0.34 + 0.06 * rng.random()))
+        k2 = int(Z * (0.60 + 0.10 * rng.random()))
+        w = max(1, hX // 6)
+        tops = _hull_tops(g, (cx - w, cx + w), (k1, k2 + 1))
+        posts = [(cx + sgn * w, k) for sgn in (-1, 1) for k in (k1, k2)]
+        if all(p in tops for p in posts):
+            deck = max(tops[p] for p in posts)
+            beam_y = min(Y - 2, deck + max(3, int(hY * 0.35)))
+            for x, k in posts:
+                g.paint_box((x, x), (tops[(x, k)] + 1, beam_y), (k, k + 1),
+                            R_FIN, only_if_empty=True)
+            for k in (k1, k2):           # portal crossbeams
+                g.paint_box((cx - w, cx + w), (beam_y, beam_y + 1), (k, k + 1),
+                            R_FIN, only_if_empty=True)
+            for sgn in (-1, 1):          # longitudinal rails
+                g.paint_box((cx + sgn * w, cx + sgn * w),
+                            (beam_y, beam_y + 1), (k1, k2 + 1), R_FIN,
+                            only_if_empty=True)
+            km = (k1 + k2) // 2          # hanging trolley block
+            g.paint_box((cx - 1, cx + 1), (beam_y - 1, beam_y), (km, km + 1),
+                        R_ACCENT, only_if_empty=True)
+
+    if "tanks" in feats:
+        # big silo tanks hugging both flanks amidships
+        rt = max(2.0, hY * 0.20)
+        z0 = int(Z * (0.28 + 0.08 * rng.random()))
+        z1 = min(Z - 1, int(Z * (0.60 + 0.12 * rng.random())))
+        n = z1 - z0 + 1
+        t = np.linspace(0, 1, max(n, 2))
+        prof = np.clip(np.minimum(t * 5, (1 - t) * 5), 0, 1) ** 0.6
+        cyv = (Y - 1) // 2
+        row = np.where(g.occ[:, cyv, (z0 + z1) // 2])[0]
+        if len(row):
+            off = (row[-1] - cx) + rt * 0.4
+            for sgn in (-1, 1):
+                g.fill_tube(cx + sgn * off, cyv, rt * prof, rt * prof, 2.6,
+                            R_CARGO, z0=z0)
+
+    if "scoop" in feats:
+        # wide collector scoop under the bow quarter, with a cutting lip
+        z0 = int(Z * 0.70)
+        z1 = min(Z - 1, int(Z * 0.94))
+        w = max(2, int(hX * 0.32))
+        jb = None
+        for k in range(z0, z1 + 1):
+            bots = [c[0] for x in range(cx - w, cx + w + 1)
+                    for c in (np.where(g.occ[x, :, k])[0],) if len(c)]
+            if not bots:
+                continue
+            jb = min(bots)
+            g.paint_box((cx - w, cx + w), (jb - 2, jb - 1), (k, k), R_FIN,
+                        only_if_empty=True)
+        if jb is not None:
+            g.paint_box((cx - w, cx + w), (jb - 3, jb - 3), (z1 - 1, z1),
+                        R_ACCENT, only_if_empty=True)
+
+
 def _enforce_symmetry(g: VoxelGrid) -> None:
     half = g.X // 2
     if half == 0:
@@ -762,11 +845,15 @@ def build_ship(spec: ShipSpec) -> ShipModel:
         hX * (wing_scale[0] + wing_scale[1] * _rng("wingspan").random()))))
     fin_h = max(2, int(round(hY * (0.40 + 0.35 * _rng("finh").random()))))
     cab_h = max(2, hY // 3)
-    pad_x = wing_span if spec.wings else 0
+    # miners carry external rig gear (tanks/crane/scoop) — reserve room for it
+    rig_pad = (max(3, int(hY * 0.30) + 2), max(4, int(hY * 0.40) + 2)) \
+        if spec.hull_class == "miner" else (0, 0)
+    pad_x = max(wing_span if spec.wings else 0, rig_pad[0])
     # wings may tilt (di-/anhedral, x-foils) or end in winglets — reserve height
     wing_pad_y = (int(round(wing_span * 0.8)) + max(2, hY // 2)) if spec.wings else 0
     pad_y = max(fin_h if spec.fins else 0, cab_h if spec.bridge else 0,
                 max(2, hY // 3) if layout == "keel" else 0, wing_pad_y,
+                rig_pad[1],
                 1 if spec.turrets else 0)   # turret pads sit 1 voxel above the hull
     X = hX + 2 * pad_x
     Y = hY + 2 * pad_y   # symmetric so the hull stays centred in the grid
@@ -778,6 +865,7 @@ def build_ship(spec: ShipSpec) -> ShipModel:
     _add_bridge(g, spec, (hX, hY), cab_h, _rng("bridge"))
     _add_wings(g, spec, wing_span, (hX, hY), _rng("wings"))
     _add_fins(g, spec, fin_h, (hX, hY), _rng("fins"))
+    _add_mining_rig(g, spec, (hX, hY), _rng("rig"))
     _add_turret_mounts(g, spec, (hX, hY), _rng("turrets"))
 
     _enforce_symmetry(g)

@@ -189,7 +189,9 @@ def make_variants(*vals, progress=gr.Progress()):
             if not ship.blocks:
                 continue
             png = os.path.join(_EXPORT_DIR, f"variant_{vseed}.png")
-            save_preview(ship, png, figsize=3.2)
+            # bow three-quarter view: layouts (fork/hammer/keel) differ at the
+            # bow — the default rear view made every variant look the same box
+            save_preview(ship, png, figsize=3.2, azim=122)
             rs = spec.resolved()
             cap = f"{rs.length}×{rs.width}×{rs.height} · дв. {rs.engines}"
             if ship.layout:
@@ -213,6 +215,26 @@ def pick_variant(evt: gr.SelectData, seeds, *vals):
     if seeds and evt.index is not None and int(evt.index) < len(seeds):
         vals[_SEED_ARG] = int(seeds[int(evt.index)])
     return (*generate(*vals), vals[_SEED_ARG])
+
+
+def make_variants_fresh(*vals, progress=gr.Progress()):
+    """🎲 / Enter: a new batch — and drop the "variant picked" latch."""
+    return (*make_variants(*vals, progress=progress), False)
+
+
+def pick_variant_mark(evt: gr.SelectData, seeds, *vals):
+    """Gallery click: open the variant and latch it for fine-tuning."""
+    return (*pick_variant(evt, seeds, *vals), True)
+
+
+def retune(picked, seeds, *vals, progress=gr.Progress()):
+    """A "what ship do I want" control changed: while browsing this rebuilds
+    the whole batch, but once the user picked a variant it refines THAT seed
+    instead of resetting the gallery with fresh random ones."""
+    if picked:
+        vals = list(vals)
+        return (gr.update(), seeds, *generate(*vals), vals[_SEED_ARG])
+    return make_variants(*vals, progress=progress)
 
 
 EXAMPLES = [
@@ -291,12 +313,31 @@ def turret_variants(*vals, progress=gr.Progress()):
     return (thumbs, seeds, *turret_generate(*vals), seeds[0])
 
 
+def turret_variants_fresh(*vals, progress=gr.Progress()):
+    """🎲: a new turret batch — and drop the "variant picked" latch."""
+    return (*turret_variants(*vals, progress=progress), False)
+
+
+def turret_retune(picked, seeds, *vals, progress=gr.Progress()):
+    """Kind/size/style/barrels changed: rebuild the batch while browsing,
+    refine the picked turret once one is chosen."""
+    if picked:
+        vals = list(vals)
+        return (gr.update(), seeds, *turret_generate(*vals), vals[_T_SEED_ARG])
+    return turret_variants(*vals, progress=progress)
+
+
 def turret_pick(evt: gr.SelectData, seeds, *vals):
     """Click on a turret thumbnail: open that variant in the main preview."""
     vals = list(vals)
     if seeds and evt.index is not None and int(evt.index) < len(seeds):
         vals[_T_SEED_ARG] = int(seeds[int(evt.index)])
     return (*turret_generate(*vals), vals[_T_SEED_ARG])
+
+
+def turret_pick_mark(evt: gr.SelectData, seeds, *vals):
+    """Gallery click: open the turret and latch it for fine-tuning."""
+    return (*turret_pick(evt, seeds, *vals), True)
 
 
 def turret_save_to_game(kind, size, barrels, style, seed, step=0.01):
@@ -359,6 +400,7 @@ def build_ui() -> gr.Blocks:
         with gr.Tabs():
             with gr.Tab("🚀 Корабль"):
                 seeds_state = gr.State([])
+                picked_state = gr.State(False)   # a gallery variant is chosen
 
                 with gr.Row(equal_height=False):
                     # ------------------------------------------ the ship (left)
@@ -456,18 +498,21 @@ def build_ui() -> gr.Blocks:
 
                 # main cycle: Enter / 🎲 -> variants; click a thumbnail -> open it.
                 # Lazy mode: every "what ship do I want" control (class, style,
-                # layout, parts, module counts) rebuilds the batch of variants.
+                # layout, parts, module counts) rebuilds the batch of variants —
+                # but only until a variant is picked; after that the same
+                # controls refine the picked seed (🎲 starts a fresh browse).
                 wanted = (hull_class, style, layout, wing_kind, wings, fins, bridge,
                           engines, turrets)
-                variants_btn.click(make_variants, inputs=inputs, outputs=v_outputs)
-                desc.submit(make_variants, inputs=inputs, outputs=v_outputs)
+                variants_btn.click(make_variants_fresh, inputs=inputs,
+                                   outputs=v_outputs + [picked_state])
+                desc.submit(make_variants_fresh, inputs=inputs,
+                            outputs=v_outputs + [picked_state])
                 for c in wanted:
-                    if isinstance(c, gr.Slider):
-                        c.release(make_variants, inputs=inputs, outputs=v_outputs)
-                    else:
-                        c.input(make_variants, inputs=inputs, outputs=v_outputs)
-                variants_gal.select(pick_variant, inputs=[seeds_state] + inputs,
-                                    outputs=outputs + [seed])
+                    ev = c.release if isinstance(c, gr.Slider) else c.input
+                    ev(retune, inputs=[picked_state, seeds_state] + inputs,
+                       outputs=v_outputs)
+                variants_gal.select(pick_variant_mark, inputs=[seeds_state] + inputs,
+                                    outputs=outputs + [seed, picked_state])
                 # fine-tuning: the remaining controls rebuild the CURRENT ship live
                 # (.input, not .change: seed write-back must not re-trigger)
                 for c in inputs:
@@ -483,6 +528,7 @@ def build_ui() -> gr.Blocks:
             # ------------------------------------------------- turret designer
             with gr.Tab("🎯 Турель"):
                 t_seeds_state = gr.State([])
+                t_picked_state = gr.State(False)
 
                 with gr.Row(equal_height=False):
                     with gr.Column(scale=8):
@@ -528,14 +574,19 @@ def build_ui() -> gr.Blocks:
                 t_outputs = [t_preview, t_download, t_info, t_err]
                 tv_outputs = [t_gal, t_seeds_state] + t_outputs + [t_seed]
 
-                t_btn.click(turret_variants, inputs=t_inputs, outputs=tv_outputs)
+                t_btn.click(turret_variants_fresh, inputs=t_inputs,
+                            outputs=tv_outputs + [t_picked_state])
                 for c in (t_kind, t_size, t_style):
-                    c.input(turret_variants, inputs=t_inputs, outputs=tv_outputs)
-                t_barrels.release(turret_variants, inputs=t_inputs, outputs=tv_outputs)
+                    c.input(turret_retune,
+                            inputs=[t_picked_state, t_seeds_state] + t_inputs,
+                            outputs=tv_outputs)
+                t_barrels.release(turret_retune,
+                                  inputs=[t_picked_state, t_seeds_state] + t_inputs,
+                                  outputs=tv_outputs)
                 t_step.release(turret_generate, inputs=t_inputs, outputs=t_outputs)
                 t_seed.input(turret_generate, inputs=t_inputs, outputs=t_outputs)
-                t_gal.select(turret_pick, inputs=[t_seeds_state] + t_inputs,
-                             outputs=t_outputs + [t_seed])
+                t_gal.select(turret_pick_mark, inputs=[t_seeds_state] + t_inputs,
+                             outputs=t_outputs + [t_seed, t_picked_state])
                 t_to_game.click(turret_save_to_game, inputs=t_inputs, outputs=[t_saved])
 
         # a default ship right away, so the page never opens empty

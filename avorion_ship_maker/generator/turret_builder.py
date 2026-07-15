@@ -264,6 +264,9 @@ def build_turret(spec: TurretSpec) -> TurretModel:
         x_off = 0.0
         if ra.random() < 0.5:
             x_off = _q(ra.choice((1, -1)) * (0.08 + 0.10 * ra.random()) * S)
+        side = ra.choice((0, 1, -1))     # elbow: clevis or side-hung forearm
+        if side:
+            x_off = _q(x_off * 0.5)      # side-mount already shifts the arm
         y0a = collar_h
         tow_h = _q((0.30 + 0.12 * ra.random()) * S)
         ys1 = _q(y0a + tow_h)
@@ -287,22 +290,36 @@ def build_turret(spec: TurretSpec) -> TurretModel:
         box(t.body, x_off - 0.04 * S, y0a + tow_h * 0.12, tzf,
             x_off + 0.04 * S, y0a + tow_h * 0.5, tzf + 0.015 * S,
             glow, idx=_GLOW)
-        # clevis cheeks that hold the elbow, with accent hinge caps
+        # elbow joint: either a symmetric clevis (forearm between two cheeks,
+        # on the tower axis) or SIDE-MOUNTED like the reference manipulator —
+        # the whole forearm, head included, hangs beside the shoulder
         ct = _q(max(0.035 * S, 2 * step))
         ye = _q(ys1 + 0.10 * S)
-        for s in (1, -1):
-            box(t.body, x_off + s * aw, ys1 - 0.12 * S, -0.13 * S,
-                x_off + s * (aw + ct), ye + 0.11 * S, 0.13 * S,
+        bw = _q(aw * 0.75)               # forearm boom half-width
+        if side:
+            # one deep bearing cheek; the forearm's hinge hub plunges into it
+            box(t.body, x_off + side * aw, ys1 - 0.14 * S, -0.13 * S,
+                x_off + side * (aw + ct), ye + 0.11 * S, 0.13 * S,
                 shade(hcol, 0.85))
-            box(t.body, x_off + s * (aw + ct), ye - 0.035 * S, -0.035 * S,
-                x_off + s * (aw + ct + 0.012 * S), ye + 0.035 * S, 0.035 * S,
+            box(t.body, x_off + side * (aw + ct), ye - 0.05 * S, -0.05 * S,
+                x_off + side * (aw + ct + 0.015 * S), ye + 0.05 * S, 0.05 * S,
                 acc)
+            arm_x = _q(x_off + side * (aw + bw + 0.01 * S))
+        else:
+            for s in (1, -1):
+                box(t.body, x_off + s * aw, ys1 - 0.12 * S, -0.13 * S,
+                    x_off + s * (aw + ct), ye + 0.11 * S, 0.13 * S,
+                    shade(hcol, 0.85))
+                box(t.body, x_off + s * (aw + ct), ye - 0.035 * S, -0.035 * S,
+                    x_off + s * (aw + ct + 0.012 * S), ye + 0.035 * S,
+                    0.035 * S, acc)
+            arm_x = x_off
 
         # ---- forearm = the elevating section, pivot at the elbow --------
         # its own rolls: boom build, fake mid-joint, head build x mount,
         # head count (row, or a 2x2 block for four); muzzles are LOCAL to
-        # the pivot, so an offset arm needs no coordinate changes below
-        t.barrel_pivot = (x_off, ye, 0.0)
+        # the pivot, so the offset forearm carries its head with it
+        t.barrel_pivot = (arm_x, ye, 0.0)
         boom_kind = ra.choice(("solid", "twin"))
         mount = ra.choice(("inline", "under"))
         head_build = ra.choice(("stub", "gun", "gun", "cutter")) \
@@ -324,7 +341,6 @@ def build_turret(spec: TurretSpec) -> TurretModel:
             box(t.barrel, -aw * 0.7, -0.08 * S, -(0.16 + 0.08 * ra.random()) * S,
                 aw * 0.7, 0.08 * S, -wh, shade(sec, 0.8))
         bh = _q(wh * 0.6)
-        bw = _q(aw * 0.75)
         alen = _q((0.45 + 0.55 * ra.random()) * S)
         z_b1 = _q(wh + alen)
         # fake second joint: a knuckle plate across the middle of the boom
