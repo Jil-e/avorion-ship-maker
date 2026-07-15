@@ -1,17 +1,17 @@
 """Procedural Avorion turret designs (the ``<turret_design>`` XML format).
 
 A turret is three block plans — static ``base``, yawing ``body`` and the
-elevating ``barrel`` — plus a muzzle position. The schema and units were
-taken from the game's own saved designs (``ships/auto-turrets/*.xml``):
-coordinates are in build units around the mount point, +z is forward,
-+y is up, and the barrel plan is local to its elevation pivot.
+elevating ``barrel`` — plus one muzzle position per barrel. The schema and
+units come from the game's own saved designs (``ships/auto-turrets``) and
+the reference turrets in ``models/Lady_turret*.xml``.
 
-Every coordinate snaps to the spec's ``step`` grid (0.01 by default — a fine
-step suits turrets), and each subsystem rolls its own looks from the seed: base
-plate shape, housing archetype, bolt-on features (ammo boxes, drums,
-sensors, conduits, vents), barrel dressing (sleeves, recoil cylinders,
-muzzle brakes, focus rings, capacitors). Two seeds => two visibly
-different turrets of the same kind.
+What the references taught us (they are ~240 blocks, half of them wedges):
+cylinders are faked with OCTAGONAL prisms built from boxes + edge wedges
+(gun drums, mantlets, muzzle rings), bases wear hazard-striped rims, the
+housing reads as an asymmetric operator cab with a glowing window, and a
+multi-barrel gun emits several ``muzzlePosition`` entries. This builder
+speaks that vocabulary; coordinates snap to the spec's ``step`` grid
+(0.01 by default) and every subsystem rolls its own look from the seed.
 """
 from __future__ import annotations
 
@@ -36,6 +36,9 @@ _CORNER = 101                          # hull corner (needs look/up)
 # face codes as in builder._FACE_CODES: +x -x +y -y +z -z
 _XP, _XN, _YP, _YN, _ZP, _ZN = 4, 5, 3, 2, 1, 0
 
+_HAZARD_A, _HAZARD_B = "c23b22", "e2e2e2"   # warning-stripe pair
+_DARK = "141414"
+
 
 @dataclass
 class TurretSpec:
@@ -58,7 +61,7 @@ class TurretModel:
     barrel: list[Block] = field(default_factory=list)
     body_pivot: tuple = (0.0, 0.0, 0.0)
     barrel_pivot: tuple = (0.0, 0.0, 0.0)
-    muzzle: tuple = (0.0, 0.0, 0.0)
+    muzzles: list = field(default_factory=list)   # one (x, y, z) per barrel
 
     def assembled(self) -> ShipModel:
         """One ShipModel with all sections placed — for previews only."""
@@ -95,6 +98,8 @@ def build_turret(spec: TurretSpec) -> TurretModel:
     W = 0.5 * S                          # base half-extent (matches game designs)
     kind = spec.kind if spec.kind in TURRET_KINDS else "cannon"
     step = max(0.001, float(spec.step or DEFAULT_STEP))
+    ring_col = mix(prim, "f0f8ff", 0.55)          # bright machined metal
+    barrel_metal = shade(sec, 0.75)
 
     def _q(v: float) -> float:
         """Snap to the spec's build grid."""
@@ -117,19 +122,54 @@ def build_turret(spec: TurretSpec) -> TurretModel:
                           index=idx, material=mat, look=look, up=up,
                           color=to_argb(color), secondary="00000000"))
 
-    def wedge(sect, x0, y0, z0, x1, y1, z1, color, d1, d2):
+    def wedge(sect, x0, y0, z0, x1, y1, z1, color, d1, d2, idx=_EDGE):
         lk, up = orient.bevel_edge_orient(d1, d2)
-        box(sect, x0, y0, z0, x1, y1, z1, color, idx=_EDGE, look=lk, up=up)
+        box(sect, x0, y0, z0, x1, y1, z1, color, idx=idx, look=lk, up=up)
+
+    def octo_z(sect, cx, cy, z0, z1, w, color, cut=0.34, idx=_HULL):
+        """Octagonal prism along z — the wedge-built stand-in for a cylinder."""
+        widx = 151 if idx == _GLOW else _EDGE     # glow prisms use glow wedges
+        c = _q(max(w * cut, step))
+        if w - c < step:                 # too small to cut -> plain box
+            box(sect, cx - w, cy - w, z0, cx + w, cy + w, z1, color, idx=idx)
+            return
+        box(sect, cx - w, cy - (w - c), z0, cx + w, cy + (w - c), z1, color, idx=idx)
+        box(sect, cx - (w - c), cy + (w - c), z0, cx + (w - c), cy + w, z1, color, idx=idx)
+        box(sect, cx - (w - c), cy - w, z0, cx + (w - c), cy - (w - c), z1, color, idx=idx)
+        for sx, dx in ((1, _XP), (-1, _XN)):
+            for sy, dy in ((1, _YP), (-1, _YN)):
+                wedge(sect, cx + sx * (w - c), cy + sy * (w - c), z0,
+                      cx + sx * w, cy + sy * w, z1, color, dx, dy, idx=widx)
+
+    def octo_y(sect, cx, cz, y0, y1, w, color, cut=0.34):
+        """Octagonal prism along y — collars, masts, pedestal drums."""
+        c = _q(max(w * cut, step))
+        if w - c < step:
+            box(sect, cx - w, y0, cz - w, cx + w, y1, cz + w, color)
+            return
+        box(sect, cx - w, y0, cz - (w - c), cx + w, y1, cz + (w - c), color)
+        box(sect, cx - (w - c), y0, cz + (w - c), cx + (w - c), y1, cz + w, color)
+        box(sect, cx - (w - c), y0, cz - w, cx + (w - c), y1, cz - (w - c), color)
+        for sx, dx in ((1, _XP), (-1, _XN)):
+            for sz, dz in ((1, _ZP), (-1, _ZN)):
+                wedge(sect, cx + sx * (w - c), y0, cz + sz * (w - c),
+                      cx + sx * w, y1, cz + sz * w, color, dx, dz)
+
+    def drum_face(sect, cx, cy, z_at, w, depth):
+        """Muzzle drum: bright ring face with a dark protruding core."""
+        octo_z(sect, cx, cy, z_at, z_at + depth, w, ring_col, cut=0.3)
+        octo_z(sect, cx, cy, z_at + depth, z_at + depth + 0.02 * S,
+               w * 0.55, _DARK, cut=0.3)
+        return _q(z_at + depth + 0.02 * S)
 
     # =============================================================== base
     rb = _rng("base")
     metal = shade(sec, 0.7)
     ph = _q((0.05 + 0.03 * rb.random()) * S)          # plate height
-    pw = _q(W * (0.92 + 0.16 * rb.random()))          # plate half-width
+    pw = _q(W * (0.9 + 0.14 * rb.random()))           # plate half-width
     base_kind = rb.choice(("square", "octo", "tiered"))
     if base_kind == "octo":
         c8 = _q(pw * 0.35)
-        # three strips + four chamfered corners = an octagonal plate
         box(t.base, -pw + c8, 0, -pw, pw - c8, ph, -pw + c8, metal)
         box(t.base, -pw, 0, -pw + c8, pw, ph, pw - c8, metal)
         box(t.base, -pw + c8, 0, pw - c8, pw - c8, ph, pw, metal)
@@ -138,17 +178,28 @@ def build_turret(spec: TurretSpec) -> TurretModel:
                   metal, _XP if sx > 0 else _XN, _ZP if sz > 0 else _ZN)
     else:
         box(t.base, -pw, 0, -pw, pw, ph, pw, metal)
-    plate_top = ph                                     # rim height of plate 1
+    plate_top = ph
     seat = ph
     if base_kind == "tiered":
         box(t.base, -pw * 0.74, ph, -pw * 0.74, pw * 0.74, ph + 0.04 * S,
             pw * 0.74, shade(sec, 0.85))
         seat = _q(ph + 0.04 * S)
-    # collar the body sits in
-    cw = _q(pw * (0.45 + 0.1 * rb.random()))
-    collar_h = _q(seat + (0.04 + 0.03 * rb.random()) * S)
-    box(t.base, -cw, seat, -cw, cw, collar_h, cw, prim)
-    if base_kind != "octo" and rb.random() < 0.6:      # rim bolts, on plate 1
+    # hazard stripes / plain trim around the plate rim (reference look)
+    haz_p = 0.8 if spec.style in ("industrial", "hazard") else 0.3
+    if base_kind != "octo" and rb.random() < haz_p:
+        bt = _q(max(0.03 * S, step))
+        nseg = 6
+        seg = 2 * pw / nseg
+        for i in range(nseg):
+            col = _HAZARD_A if i % 2 == 0 else _HAZARD_B
+            a0, a1 = -pw + i * seg, -pw + (i + 1) * seg
+            box(t.base, -pw - bt, 0, a0, -pw, plate_top, a1, col)
+            box(t.base, pw, 0, a0, pw + bt, plate_top, a1,
+                _HAZARD_B if i % 2 == 0 else _HAZARD_A)
+            box(t.base, a0, 0, -pw - bt, a1, plate_top, -pw, col)
+            box(t.base, a0, 0, pw, a1, plate_top, pw + bt,
+                _HAZARD_B if i % 2 == 0 else _HAZARD_A)
+    elif base_kind != "octo" and rb.random() < 0.5:    # rim bolts instead
         bs = _q(0.035 * S)
         bx = _q(pw - 2 * bs)
         for sxx in (1, -1):
@@ -156,6 +207,10 @@ def build_turret(spec: TurretSpec) -> TurretModel:
                 bz = _q(fz * bx)
                 box(t.base, sxx * bx - bs, plate_top, bz - bs,
                     sxx * bx + bs, plate_top + bs, bz + bs, shade(sec, 0.55))
+    # collar: an octagonal pedestal drum the body sits in
+    cw = _q(pw * (0.45 + 0.1 * rb.random()))
+    collar_h = _q(seat + (0.05 + 0.03 * rb.random()) * S)
+    octo_y(t.base, 0, 0, seat, collar_h, cw, prim)
 
     # =============================================================== body
     rh = _rng("body")
@@ -170,37 +225,53 @@ def build_turret(spec: TurretSpec) -> TurretModel:
               "railgun": 0.70, "launcher": 0.50}[kind] * W * (0.85 + 0.3 * rh.random()))
     y0 = collar_h
     y1 = _q(y0 + hh)
-    arch = rh.choice(("slab", "wedge", "stepped", "turtle"))
+    arch = rh.choice(("slab", "wedge", "stepped", "turtle", "barbette"))
     ch = _q(min(0.09 * S, hh * 0.4))
+    roof_y = y1                          # where roof features stand
 
-    if arch == "wedge":                 # low, strongly sloped glacis nose
+    pk = 0.0                             # how far the cheek plates stick out
+    if arch == "wedge":                  # low, strongly sloped glacis nose
         y1 = _q(y0 + hh * 0.85)
+        roof_y = y1
         box(t.body, -hw, y0, hz0, hw, y1, hz1, hcol)
         glac = _q(min(0.3 * S, (hz1 - hz0) * 0.5))
         wedge(t.body, -hw, y0, hz1, hw, y1, hz1 + glac, hcol, _YP, _ZP)
         wedge(t.body, -hw, y1, hz0, hw, y1 + ch, hz0 + ch, hcol, _YP, _ZN)
-    elif arch == "stepped":             # two tiers, upper set back
+    elif arch == "stepped":              # two tiers, upper set back
         ym = _q(y0 + hh * 0.55)
         box(t.body, -hw, y0, hz0, hw, ym, hz1, hcol)
         uw, uz0, uz1 = _q(hw * 0.68), _q(hz0 + 0.08 * S), _q(hz1 - 0.06 * S)
         box(t.body, -uw, ym, uz0, uw, y1, uz1, shade(hcol, 0.92))
         wedge(t.body, -uw, y1, uz1 - ch, uw, y1 + ch, uz1, hcol, _YP, _ZP)
-        hz0, hz1 = uz0, uz1             # dorsal features sit on the upper tier
-    elif arch == "turtle":              # chamfered on every top edge
+        hz0, hz1 = uz0, uz1              # dorsal features sit on the upper tier
+    elif arch == "turtle":               # chamfered on every top edge
         box(t.body, -hw, y0, hz0, hw, y1, hz1, hcol)
         wedge(t.body, -hw + ch, y1, hz1 - ch, hw - ch, y1 + ch, hz1, hcol, _YP, _ZP)
         wedge(t.body, -hw + ch, y1, hz0, hw - ch, y1 + ch, hz0 + ch, hcol, _YP, _ZN)
         wedge(t.body, hw - ch, y1, hz0 + ch, hw, y1 + ch, hz1 - ch, hcol, _YP, _XP)
         wedge(t.body, -hw, y1, hz0 + ch, -hw + ch, y1 + ch, hz1 - ch, hcol, _YP, _XN)
-        for sx, sz, dx, dz in ((1, 1, _XP, _ZP), (1, -1, _XP, _ZN),
-                               (-1, 1, _XN, _ZP), (-1, -1, _XN, _ZN)):
-            lu = orient.bevel_corner_orient(_YP, dx, dz)
-            if lu:
-                box(t.body, sx * (hw - ch), y1, sz * ((hz1 if sz > 0 else -hz0) - ch),
-                    sx * hw, y1 + ch, sz * (hz1 if sz > 0 else -hz0),
-                    hcol, idx=_CORNER, look=lu[0], up=lu[1])
-    pk = 0.0                            # how far the cheek plates stick out
-    if arch == "slab":                  # slab: cheek armour + glacis chamfer
+        for sx, dx in ((1, _XP), (-1, _XN)):
+            for sz, dz in ((1, _ZP), (-1, _ZN)):
+                lu = orient.bevel_corner_orient(_YP, dx, dz)
+                if lu:
+                    zz1 = hz1 if sz > 0 else hz0 + ch
+                    zz0 = hz1 - ch if sz > 0 else hz0
+                    box(t.body, sx * (hw - ch), y1, zz0, sx * hw, y1 + ch, zz1,
+                        hcol, idx=_CORNER, look=lu[0], up=lu[1])
+    elif arch == "barbette":             # octagonal drum housing + flat cap
+        cb = _q(min(hw, (hz1 - hz0) / 2) * 0.32)
+        box(t.body, -hw, y0, hz0 + cb, hw, y1, hz1 - cb, hcol)
+        box(t.body, -(hw - cb), y0, hz1 - cb, hw - cb, y1, hz1, hcol)
+        box(t.body, -(hw - cb), y0, hz0, hw - cb, y1, hz0 + cb, hcol)
+        for sx, dx in ((1, _XP), (-1, _XN)):
+            for sz, dz in ((1, _ZP), (-1, _ZN)):
+                wedge(t.body, sx * (hw - cb), y0, sz * ((hz1 if sz > 0 else -hz0) - cb),
+                      sx * hw, y1, sz * (hz1 if sz > 0 else -hz0), hcol, dx, dz)
+        box(t.body, -(hw - cb), y1, hz0 + cb, hw - cb, y1 + 0.03 * S,
+            hz1 - cb, shade(hcol, 0.9))
+        roof_y = _q(y1 + 0.03 * S)
+        ch = cb                          # keeps roof features off the rim
+    else:                                # slab: cheek armour + glacis chamfer
         box(t.body, -hw, y0, hz0, hw, y1, hz1, hcol)
         wedge(t.body, -hw, y1, hz1 - ch, hw, y1 + ch, hz1, hcol, _YP, _ZP)
         pk = _q(0.03 * S)
@@ -209,60 +280,70 @@ def build_turret(spec: TurretSpec) -> TurretModel:
                 s * (hw + pk), y0 + hh * 0.8, hz1 - 0.08 * S, shade(hcol, 0.8))
 
     # ---- bolt-on features, rolled independently -------------------------
-    # fy0..fy1 / fw: the wall the rear & front features may anchor to
-    # (on "stepped" that's the upper tier — the lower one sticks out around it)
     rf = _rng("feat")
     zc = _q((hz0 + hz1) / 2)
     fy0, fy1 = (ym, y1) if arch == "stepped" else (y0, y1)
     fw = uw if arch == "stepped" else hw
     fh = fy1 - fy0
     has_ammo = rf.random() < 0.5 or kind == "launcher"
-    if has_ammo:                        # rear ammo/equipment box
+    if has_ammo:                         # rear ammo/equipment box
         box(t.body, -fw * 0.7, fy0 + fh * 0.1, hz0 - (0.1 + 0.08 * rf.random()) * S,
             fw * 0.7, fy0 + fh * (0.75 + 0.2 * rf.random()), hz0, shade(sec, 0.8))
-    else:                               # cooling vents on the rear face
+    else:                                # cooling vents on the rear face
         for i in range(3):
             vy = fy0 + fh * (0.2 + 0.22 * i)
             box(t.body, -fw * 0.55, vy, hz0 - 0.02 * S, fw * 0.55,
-                vy + fh * 0.1, hz0, "141414")
+                vy + fh * 0.1, hz0, _DARK)
     drum_side = 0
     if kind == "chaingun" or rf.random() < 0.18:   # ammo drum on a flank
         drum_side = rf.choice((1, -1))
         box(t.body, drum_side * (hw + pk), y0 + hh * 0.08, -0.3 * W,
             drum_side * (hw + pk + 0.2 * S), y0 + hh * 0.55, 0.2 * W,
             shade(sec, 0.85))
+    if rf.random() < 0.55:               # operator window: dark frame + glow pane
+        ws = -drum_side if drum_side else rf.choice((1, -1))
+        wy0, wy1 = _q(fy0 + fh * 0.45), _q(fy0 + fh * 0.8)
+        wz0, wz1 = _q(hz0 + (hz1 - hz0) * 0.55), _q(hz0 + (hz1 - hz0) * 0.85)
+        wx = _q(fw + (pk if arch == "slab" else 0))
+        box(t.body, ws * wx, wy0, wz0, ws * (wx + 0.012 * S), wy1, wz1, _DARK)
+        box(t.body, ws * (wx + 0.012 * S), wy0 + fh * 0.05, wz0 + 0.02 * S,
+            ws * (wx + 0.02 * S), wy1 - fh * 0.05, wz1 - 0.02 * S, glow, idx=_GLOW)
     # top features stay inside the chamfer-free zone of the roof
     tz0, tz1 = _q(hz0 + ch), _q(hz1 - ch)
-    if rf.random() < 0.4:               # sensor mast + emissive tip
+    if rf.random() < 0.4:                # sensor mast + emissive tip
         ms = _q(max(0.035 * S, 2 * step))
         mz = _q(max(hz0 + (hz1 - hz0) * 0.3, tz0 + ms))
         mh = _q((0.12 + 0.1 * rf.random()) * S)
-        box(t.body, -ms, y1, mz - ms, ms, y1 + mh, mz + ms, shade(sec, 0.6))
-        box(t.body, -ms, y1 + mh, mz - ms, ms, y1 + mh + 0.04 * S, mz + ms,
+        octo_y(t.body, 0, mz, roof_y, roof_y + mh, ms, shade(sec, 0.6))
+        box(t.body, -ms, roof_y + mh, mz - ms, ms, roof_y + mh + 0.04 * S, mz + ms,
             glow, idx=_GLOW)
-        tz0 = _q(mz + ms)               # later roof features start behind the mast
-    if rf.random() < 0.35:              # rangefinder stubs on the flanks
+        tz0 = _q(mz + ms)                # later roof features start behind it
+    if rf.random() < 0.35:               # rangefinder stubs, rear flank quarter
         ry = _q(fy0 + fh * 0.6)
         sx = _q(fw + (pk if arch == "slab" else 0))
+        rz = _q(hz0 + (hz1 - hz0) * 0.25)
         for s in (1, -1):
-            box(t.body, s * sx, ry, zc - 0.05 * S, s * (sx + 0.1 * S),
-                ry + fh * 0.22, zc + 0.05 * S, shade(sec, 0.65))
-    if rf.random() < 0.45:              # cable conduit, away from the drum
+            box(t.body, s * sx, ry, rz - 0.05 * S, s * (sx + 0.1 * S),
+                ry + fh * 0.22, rz + 0.05 * S, shade(sec, 0.65))
+    if rf.random() < 0.45:               # cable conduit, below the window band
         cs = -drum_side if drum_side else rf.choice((1, -1))
-        box(t.body, cs * (hw + pk), y0 + hh * 0.32, hz0 + (hz1 - hz0) * 0.2,
-            cs * (hw + pk + 0.02 * S), y0 + hh * 0.48, hz0 + (hz1 - hz0) * 0.85,
+        box(t.body, cs * (hw + pk), y0 + hh * 0.24, hz0 + (hz1 - hz0) * 0.2,
+            cs * (hw + pk + 0.02 * S), y0 + hh * 0.38, hz0 + (hz1 - hz0) * 0.85,
             shade(sec, 0.5))
     # one accent element, placement rolled ("front" clashes with a wedge glacis)
     place = rf.choice(("sides", "top") if arch == "wedge" else ("sides", "top", "front"))
+    # flank bands are height-separated: accent 8-22%, conduit 24-38%,
+    # window 45-80%, rangefinder 60-82% — they may share a flank safely
     if place == "sides":
         for s in ((-drum_side,) if drum_side else (1, -1)):
-            box(t.body, s * (hw + pk), y0 + hh * 0.25, zc - 0.12 * S,
-                s * (hw + pk + 0.015 * S), y0 + hh * 0.55, zc + 0.12 * S, acc)
+            box(t.body, s * (hw + pk), y0 + hh * 0.08, zc - 0.12 * S,
+                s * (hw + pk + 0.015 * S), y0 + hh * 0.22, zc + 0.12 * S, acc)
     elif place == "top":
         az0 = max(tz0, _q(hz0 + (hz1 - hz0) * 0.5))
         az1 = min(tz1, _q(hz0 + (hz1 - hz0) * 0.9))
         if az1 > az0:
-            box(t.body, -hw * 0.25, y1, az0, hw * 0.25, y1 + 0.02 * S, az1, acc)
+            box(t.body, -hw * 0.25, roof_y, az0, hw * 0.25, roof_y + 0.02 * S,
+                az1, acc)
     else:
         box(t.body, -fw * 0.6, fy0 + fh * 0.32, hz1, fw * 0.6,
             fy0 + fh * 0.68, hz1 + 0.02 * S, acc)
@@ -270,7 +351,7 @@ def build_turret(spec: TurretSpec) -> TurretModel:
         gz = max(tz0, _q(hz0 + (hz1 - hz0) * (0.45 + 0.25 * rf.random())))
         gz1 = min(tz1, _q(gz + 0.14 * S))
         if gz1 > gz:
-            box(t.body, -0.05 * S, y1, gz, 0.05 * S, y1 + 0.02 * S, gz1,
+            box(t.body, -0.05 * S, roof_y, gz, 0.05 * S, roof_y + 0.02 * S, gz1,
                 glow, idx=_GLOW)
 
     # ============================================================== barrel
@@ -280,22 +361,21 @@ def build_turret(spec: TurretSpec) -> TurretModel:
     t.barrel_pivot = (0.0, piv_y, piv_z)
 
     nb = spec.barrels if spec.barrels and spec.barrels > 0 else \
-        {"cannon": rr.choice((1, 1, 2)), "chaingun": rr.choice((2, 3, 3)),
+        {"cannon": rr.choice((1, 1, 2)), "chaingun": rr.choice((2, 3, 4)),
          "laser": 1, "railgun": 2, "launcher": rr.choice((2, 3, 4))}[kind]
     nb = max(1, min(4, int(nb)))
     cal = _q({"cannon": 0.15, "chaingun": 0.085, "laser": 0.11,
               "railgun": 0.07, "launcher": 0.11}[kind] * S * (0.85 + 0.3 * rr.random()))
     cal = max(cal, 2 * step)
-    L = _q({"cannon": 1.05, "chaingun": 0.80, "laser": 0.90,
+    L = _q({"cannon": 1.05, "chaingun": 0.85, "laser": 0.90,
             "railgun": 1.45, "launcher": 0.55}[kind] * S * (0.75 + 0.5 * rr.random()))
     gap = {"railgun": 2.6, "launcher": 1.3}.get(kind, 2.4)
     spread = _q((nb - 1) * gap * cal)
     z0t = _q(0.06 * S)
-    barrel_metal = shade(sec, 0.75)
 
     # yoke spans all tubes and reaches back over the pivot
     yk = _q(max(cal * 1.1, 0.09 * S))
-    yx = _q(spread / 2 + cal)
+    yx = _q(max(spread / 2 + cal, 0.14 * S))
     box(t.barrel, -yx, -yk, -0.22 * S, yx, yk, z0t, shade(prim, 0.85))
     for s in (1, -1):                    # trunnion caps
         box(t.barrel, s * yx, -yk * 0.6, -0.16 * S, s * (yx + 0.04 * S),
@@ -318,71 +398,83 @@ def build_turret(spec: TurretSpec) -> TurretModel:
                 cyy = _q((j - (cols[1] - 1) / 2) * pitch)
                 box(t.barrel, cxx - cal * 0.55, cyy - cal * 0.55, z_box + L,
                     cxx + cal * 0.55, cyy + cal * 0.55, z_box + L + 0.02 * S,
-                    "141414")
-        t.muzzle = (0.0, 0.0, _q(z_box + L))
+                    _DARK)
+                t.muzzles.append((cxx, cyy, _q(z_box + L + 0.02 * S)))
+    elif kind == "chaingun":
+        # reference look: a fat octagonal gun drum with a bright ring face
+        # and the barrel cluster poking out of its dark core
+        d = _q(max(0.8 * cal, 0.03 * S))          # cluster radius
+        pat = {1: ((0, 0),), 2: ((-1, 0), (1, 0)),
+               3: ((-1, -0.6), (1, -0.6), (0, 0.8)),
+               4: ((-1, -1), (1, -1), (-1, 1), (1, 1))}[nb]
+        dw = _q(1.9 * (d + cal) + 0.02 * S)
+        d_len = _q(0.45 * L)
+        octo_z(t.barrel, 0, 0, z0t, z0t + d_len, dw, barrel_metal)
+        face_z = drum_face(t.barrel, 0, 0, _q(z0t + d_len), dw, 0.04 * S)
+        # accent ring stripe across the drum's flat top band
+        box(t.barrel, -dw * 0.6, dw, z0t + d_len * 0.35, dw * 0.6,
+            dw + 0.015 * S, z0t + d_len * 0.65, acc)
+        for fx, fy in pat:
+            x, yy = _q(fx * d), _q(fy * d)
+            box(t.barrel, x - cal / 2, yy - cal / 2, face_z,
+                x + cal / 2, yy + cal / 2, z0t + L, barrel_metal)
+            box(t.barrel, x - cal * 0.6, yy - cal * 0.6, z0t + L,
+                x + cal * 0.6, yy + cal * 0.6, z0t + L + 0.03 * S, shade(sec, 0.55))
+            t.muzzles.append((x, yy, _q(z0t + L + 0.03 * S)))
     else:
-        brake = rr.choice(("baffle", "box", "step", "none")) if kind == "cannon" else None
-        sleeve_f = 0.25 + 0.15 * rr.random()
+        brake = rr.choice(("ring", "baffle", "none")) if kind == "cannon" else None
         for k in range(nb):
             x = _q((k - (nb - 1) / 2) * gap * cal)
             z_end = _q(z0t + L)
             if kind == "cannon":
-                zs = _q(z0t + L * sleeve_f)        # thick thermal sleeve first
-                box(t.barrel, x - cal * 0.7, -cal * 0.7, z0t,
-                    x + cal * 0.7, cal * 0.7, zs, barrel_metal)
-                zb = _q(z_end - (0.12 * S if brake != "none" else 0.0))
-                box(t.barrel, x - cal / 2, -cal / 2, zs, x + cal / 2, cal / 2,
-                    zb, barrel_metal)
-                if brake == "baffle":              # stepped double baffle
-                    zm = _q(zb + 0.06 * S)
-                    box(t.barrel, x - cal * 0.85, -cal * 0.85, zb,
-                        x + cal * 0.85, cal * 0.85, zm, shade(sec, 0.55))
-                    box(t.barrel, x - cal * 0.6, -cal * 0.6, zm,
-                        x + cal * 0.6, cal * 0.6, z_end, shade(sec, 0.55))
-                elif brake == "box":               # slab brake with dark slots
-                    box(t.barrel, x - cal * 0.9, -cal * 0.75, zb,
-                        x + cal * 0.9, cal * 0.75, z_end, shade(sec, 0.55))
-                    for s in (1, -1):
-                        sx = x + s * cal * 0.9
-                        box(t.barrel, sx, -cal * 0.3, zb + 0.02 * S,
-                            sx + s * 0.015 * S, cal * 0.3, z_end - 0.02 * S,
-                            "141414")
-                elif brake == "step":
-                    box(t.barrel, x - cal * 0.75, -cal * 0.75, zb,
-                        x + cal * 0.75, cal * 0.75, z_end, shade(sec, 0.55))
+                # mantlet drum at the root, then octagonal barrel segments
+                m_end = _q(z0t + 0.14 * S)
+                m_w = min(1.9 * cal if nb == 1 else 1.1 * cal, 0.2 * S)
+                octo_z(t.barrel, x, 0, z0t, m_end, m_w, ring_col)
+                zs = _q(m_end + (z_end - m_end) * (0.3 + 0.12 * rr.random()))
+                octo_z(t.barrel, x, 0, m_end, zs, cal * 1.0, barrel_metal)
+                zb = _q(z_end - (0.10 * S if brake != "none" else 0.0))
+                octo_z(t.barrel, x, 0, zs, zb, cal * 0.62, barrel_metal)
+                if brake == "ring":       # bright muzzle drum
+                    drum_face(t.barrel, x, 0, zb, cal * 1.05, 0.08 * S)
+                elif brake == "baffle":   # stepped double baffle
+                    zm = _q(zb + 0.05 * S)
+                    octo_z(t.barrel, x, 0, zb, zm, cal * 0.95, shade(sec, 0.55))
+                    octo_z(t.barrel, x, 0, zm, z_end, cal * 0.7, shade(sec, 0.55))
+                else:
+                    octo_z(t.barrel, x, 0, zb, z_end, cal * 0.5, _DARK)
                 if rr.random() < 0.55 and nb == 1:  # recoil cylinder above
-                    box(t.barrel, x - cal * 0.3, cal * 0.7, z0t,
-                        x + cal * 0.3, cal * 1.2, _q(z0t + L * 0.45), shade(sec, 0.6))
-            elif kind == "chaingun":
-                box(t.barrel, x - cal / 2, -cal / 2, z0t, x + cal / 2, cal / 2,
-                    z_end, barrel_metal)
-                box(t.barrel, x - cal * 0.65, -cal * 0.65, z_end,
-                    x + cal * 0.65, cal * 0.65, z_end + 0.03 * S, shade(sec, 0.55))
+                    box(t.barrel, x - cal * 0.3, cal * 1.0, m_end,
+                        x + cal * 0.3, cal * 1.5, _q(m_end + L * 0.4), shade(sec, 0.6))
+                t.muzzles.append((x, 0.0, _q(z_end + 0.02 * S)))
             elif kind == "laser":
-                # emitter, then tube segments separated by wider focus rings
-                zs = _q(z0t + L * 0.16)
-                box(t.barrel, x - cal * 0.8, -cal * 0.8, z0t,
-                    x + cal * 0.8, cal * 0.8, zs, prim)
+                # emitter dish, then tube segments between wider focus rings
+                m_end = _q(z0t + 0.12 * S)
+                e_w = min(1.7 * cal if nb == 1 else 1.05 * cal, 0.18 * S)
+                octo_z(t.barrel, x, 0, z0t, m_end, e_w, prim)
                 n_rings = rr.choice((2, 3))
-                zprev = zs
+                zprev = m_end
                 for i in range(n_rings):
                     zr = _q(z0t + L * (0.35 + 0.5 * (i + 1) / (n_rings + 0.5)))
                     box(t.barrel, x - cal * 0.45, -cal * 0.45, zprev,
                         x + cal * 0.45, cal * 0.45, zr, barrel_metal)
-                    box(t.barrel, x - cal * 0.75, -cal * 0.75, zr,
-                        x + cal * 0.75, cal * 0.75, _q(zr + 0.04 * S), shade(sec, 0.55))
+                    octo_z(t.barrel, x, 0, zr, _q(zr + 0.04 * S), cal * 0.8,
+                           ring_col)
                     zprev = _q(zr + 0.04 * S)
                 box(t.barrel, x - cal * 0.45, -cal * 0.45, zprev,
                     x + cal * 0.45, cal * 0.45, z_end, barrel_metal)
-                box(t.barrel, x - cal * 0.6, -cal * 0.6, z_end,
-                    x + cal * 0.6, cal * 0.6, z_end + 0.07 * S, glow, idx=_GLOW)
-                # glow rail over the FIRST tube segment only (rings are wider)
+                octo_z(t.barrel, x, 0, z_end, _q(z_end + 0.07 * S), cal * 0.6,
+                       glow, idx=_GLOW)
+                # glow rail over the first tube segment only (rings are wider)
                 first_ring = _q(z0t + L * (0.35 + 0.5 / (n_rings + 0.5)))
-                box(t.barrel, x - cal * 0.15, cal * 0.45, zs,
-                    x + cal * 0.15, cal * 0.45 + 0.02 * S, first_ring, glow, idx=_GLOW)
+                box(t.barrel, x - cal * 0.15, cal * 0.45, m_end,
+                    x + cal * 0.15, cal * 0.45 + 0.02 * S, first_ring,
+                    glow, idx=_GLOW)
+                t.muzzles.append((x, 0.0, _q(z_end + 0.07 * S)))
             elif kind == "railgun":
                 box(t.barrel, x - cal / 2, -cal / 2, z0t, x + cal / 2, cal / 2,
                     z_end, barrel_metal)
+                t.muzzles.append((x, 0.0, z_end))
         if kind == "railgun" and nb >= 2:
             inx = _q(spread / 2 - cal / 2)
             for fz in (0.3, 0.62, 0.9):  # spacer bars between the rails
@@ -390,10 +482,11 @@ def build_turret(spec: TurretSpec) -> TurretModel:
                     _q(z0t + L * fz + 0.04 * S), mix(sec, acc, 0.5))
             box(t.barrel, -inx, -cal * 0.25, z0t, inx, cal * 0.25,
                 _q(z0t + L * 0.14), glow, idx=_GLOW)   # arc glow near the breech
-            for s in (1, -1):            # capacitor banks on the yoke
-                box(t.barrel, s * yx * 0.25, yk, -0.18 * S,
-                    s * yx * 0.95, yk + 0.08 * S, -0.02 * S, shade(sec, 0.8))
-        tip = _q(z0t + L + (0.07 * S if kind == "laser" else 0.0))
-        t.muzzle = (0.0, 0.0, tip)
+            for s in (1, -1):            # capacitor drums outside the rails
+                octo_z(t.barrel, s * (spread / 2 + cal / 2 + 0.8 * cal), 0,
+                       z0t, _q(z0t + L * 0.35), cal * 0.8, shade(sec, 0.8))
+            t.muzzles = [(0.0, 0.0, _q(z_end))]        # one shot between rails
 
+    if not t.muzzles:
+        t.muzzles = [(0.0, 0.0, _q(z0t + L))]
     return t

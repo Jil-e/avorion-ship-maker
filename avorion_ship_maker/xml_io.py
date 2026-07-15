@@ -74,8 +74,10 @@ def turret_to_xml(t) -> str:
         lines.append(f'\t<{tag} px="{fmt_num(px)}" py="{fmt_num(py)}" pz="{fmt_num(pz)}">')
         lines.extend(_plan_lines(blocks, "\t\t"))
         lines.append(f"\t</{tag}>")
-    mx, my, mz = t.muzzle
-    lines.append(f'\t<muzzlePosition x="{fmt_num(mx)}" y="{fmt_num(my)}" z="{fmt_num(mz)}"/>')
+    # one muzzlePosition per barrel — multi-barrel designs saved by the game
+    # (e.g. quad turrets) carry several of these
+    for mx, my, mz in t.muzzles:
+        lines.append(f'\t<muzzlePosition x="{fmt_num(mx)}" y="{fmt_num(my)}" z="{fmt_num(mz)}"/>')
     lines.append('\t<version major="2" minor="0" patch="0"/>')
     lines.append("</turret_design>")
     return _NL.join(lines) + _NL
