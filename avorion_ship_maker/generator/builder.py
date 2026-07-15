@@ -112,6 +112,8 @@ def _hull_arrays(spec: ShipSpec, rng: random.Random):
     zc = np.arange(Z) / max(Z - 1, 1)        # 0 = stern, 1 = bow
     # bow taper with a per-seed nose style (boxy hulls avoid needle noses)
     kinds = _NOSE_KINDS if box < 0.75 else _NOSE_KINDS[1::2]
+    if spec.hull_class == "miner":       # flat working noses (shovel / ram)
+        kinds = _NOSE_KINDS[2:]
     _, we, he, pw, ph = kinds[rng.randrange(len(kinds))]
     nose = float(np.clip(spec.nose * (0.8 + 0.5 * rng.random()), 0.05, 0.9))
     t = np.clip((zc - (1 - nose)) / nose, 0, 1)
@@ -518,61 +520,61 @@ def _add_fins(g: VoxelGrid, spec: ShipSpec, fin_h: int, hull: tuple[int, int],
 
 def _add_mining_rig(g: VoxelGrid, spec: ShipSpec, hull: tuple[int, int],
                     rng: random.Random) -> None:
-    """Miner identity kit: per-seed industrial gear — a dorsal gantry crane,
-    flank silo tanks, a ventral scoop — so no two miners read as the same
-    grey box with a cab."""
+    """Miner identity: heavy-machinery language (CAT vibes, per the user's
+    reference) — reinforced shoulder pedestals with turret pads where the
+    manipulator arms plug in, a ventral dozer blade with a hazard-striped
+    cutting lip, and low armour skirts. No cranes, no silo tubes."""
     if spec.hull_class != "miner":
         return
     hX, hY = hull
     X, Y, Z = g.X, g.Y, g.Z
     cx = (X - 1) // 2
-    feats = rng.sample(("crane", "tanks", "scoop"), k=rng.choice((1, 2, 2)))
 
-    if "crane" in feats:
-        # gantry over the working deck: two portal frames + rails between
-        k1 = int(Z * (0.34 + 0.06 * rng.random()))
-        k2 = int(Z * (0.60 + 0.10 * rng.random()))
-        w = max(1, hX // 6)
-        tops = _hull_tops(g, (cx - w, cx + w), (k1, k2 + 1))
-        posts = [(cx + sgn * w, k) for sgn in (-1, 1) for k in (k1, k2)]
-        if all(p in tops for p in posts):
-            deck = max(tops[p] for p in posts)
-            beam_y = min(Y - 2, deck + max(3, int(hY * 0.35)))
-            for x, k in posts:
-                g.paint_box((x, x), (tops[(x, k)] + 1, beam_y), (k, k + 1),
-                            R_FIN, only_if_empty=True)
-            for k in (k1, k2):           # portal crossbeams
-                g.paint_box((cx - w, cx + w), (beam_y, beam_y + 1), (k, k + 1),
-                            R_FIN, only_if_empty=True)
-            for sgn in (-1, 1):          # longitudinal rails
-                g.paint_box((cx + sgn * w, cx + sgn * w),
-                            (beam_y, beam_y + 1), (k1, k2 + 1), R_FIN,
-                            only_if_empty=True)
-            km = (k1 + k2) // 2          # hanging trolley block
-            g.paint_box((cx - 1, cx + 1), (beam_y - 1, beam_y), (km, km + 1),
-                        R_ACCENT, only_if_empty=True)
+    # manipulator shoulders: a chunky pedestal on the forward port flank
+    # (mirrored by symmetry), crowned with a turret-base pad for the arm.
+    # Try several stations — the first one clear of the bridge/engines wins.
+    p = max(1, min(3, hX // 9))
+    ph = max(2, hY // 6)
+    for fz in (0.62 + 0.08 * rng.random(), 0.50, 0.40):
+        kz = int(Z * fz)
+        raw = _hull_tops(g, (0, cx), (kz - p, kz + p))
+        # hull columns only: a pedestal must not stand on the cab or a wing
+        tops = {q: j for q, j in raw.items()
+                if g.role[q[0], j, q[1]] == R_HULL}
+        # innermost port edge across the whole footprint span, so the
+        # pedestal never hangs off a tapering flank (hammer bows narrow)
+        edges = []
+        for k in range(kz - p, kz + p + 1):
+            cols = [x for x in range(cx + 1) if (x, k) in tops]
+            if not cols:
+                edges = None
+                break
+            edges.append(cols[0])
+        if edges is None:
+            continue
+        x_lo = min(max(edges) + 1, cx - p - 1)
+        foot = [(x, k) for x in range(x_lo, x_lo + p + 1)
+                for k in range(kz - p, kz + p + 1)]
+        if not all(q in tops for q in foot):
+            continue
+        deck = max(tops[q] for q in foot)
+        if deck + ph + 1 > Y - 1:        # no headroom at this station
+            continue
+        for x, k in foot:                # solid riser up to a common top
+            g.paint_box((x, x), (tops[(x, k)] + 1, deck + ph), (k, k),
+                        R_HULL, only_if_empty=True)
+        g.paint_box((x_lo, x_lo + p), (deck + ph, deck + ph),
+                    (kz - p, kz + p), R_ACCENT)          # collar ring
+        g.paint_box((x_lo, x_lo + p), (deck + ph + 1, deck + ph + 1),
+                    (kz - p, kz + p), R_TURRET)          # the arm's pad
+        break
 
-    if "tanks" in feats:
-        # big silo tanks hugging both flanks amidships
-        rt = max(2.0, hY * 0.20)
-        z0 = int(Z * (0.28 + 0.08 * rng.random()))
-        z1 = min(Z - 1, int(Z * (0.60 + 0.12 * rng.random())))
-        n = z1 - z0 + 1
-        t = np.linspace(0, 1, max(n, 2))
-        prof = np.clip(np.minimum(t * 5, (1 - t) * 5), 0, 1) ** 0.6
-        cyv = (Y - 1) // 2
-        row = np.where(g.occ[:, cyv, (z0 + z1) // 2])[0]
-        if len(row):
-            off = (row[-1] - cx) + rt * 0.4
-            for sgn in (-1, 1):
-                g.fill_tube(cx + sgn * off, cyv, rt * prof, rt * prof, 2.6,
-                            R_CARGO, z0=z0)
-
-    if "scoop" in feats:
-        # wide collector scoop under the bow quarter, with a cutting lip
-        z0 = int(Z * 0.70)
+    if rng.random() < 0.75:
+        # ventral dozer blade under the bow, two plates thick, with an
+        # alternating hazard lip like a CAT bucket edge
+        z0 = int(Z * 0.68)
         z1 = min(Z - 1, int(Z * 0.94))
-        w = max(2, int(hX * 0.32))
+        w = max(2, int(hX * 0.40))
         jb = None
         for k in range(z0, z1 + 1):
             bots = [c[0] for x in range(cx - w, cx + w + 1)
@@ -582,9 +584,28 @@ def _add_mining_rig(g: VoxelGrid, spec: ShipSpec, hull: tuple[int, int],
             jb = min(bots)
             g.paint_box((cx - w, cx + w), (jb - 2, jb - 1), (k, k), R_FIN,
                         only_if_empty=True)
-        if jb is not None:
-            g.paint_box((cx - w, cx + w), (jb - 3, jb - 3), (z1 - 1, z1),
-                        R_ACCENT, only_if_empty=True)
+        if jb is not None:               # striped cutting lip, one lower
+            for i, x in enumerate(range(cx - w, cx + w + 1)):
+                role = R_ACCENT if (i // 2) % 2 == 0 else R_FIN
+                g.paint_box((x, x), (jb - 3, jb - 3), (z1 - 1, z1), role,
+                            only_if_empty=True)
+
+    if rng.random() < 0.6:
+        # low armour skirts hugging the lower flanks (bumper plates), with
+        # a horizontal accent stripe through the middle
+        z0 = int(Z * (0.22 + 0.06 * rng.random()))
+        z1 = int(Z * (0.58 + 0.08 * rng.random()))
+        cyv = (Y - 1) // 2
+        j0 = cyv - max(2, int(hY * 0.28))
+        j1 = cyv - 1
+        jm = (j0 + j1) // 2
+        for k in range(z0, z1 + 1):
+            for j in range(j0, j1 + 1):
+                row = np.where(g.occ[:, j, k])[0]
+                if len(row):
+                    g.paint_box((row[0] - 1, row[0] - 1), (j, j), (k, k),
+                                R_ACCENT if j == jm else R_FIN,
+                                only_if_empty=True)
 
 
 def _enforce_symmetry(g: VoxelGrid) -> None:
@@ -845,9 +866,8 @@ def build_ship(spec: ShipSpec) -> ShipModel:
         hX * (wing_scale[0] + wing_scale[1] * _rng("wingspan").random()))))
     fin_h = max(2, int(round(hY * (0.40 + 0.35 * _rng("finh").random()))))
     cab_h = max(2, hY // 3)
-    # miners carry external rig gear (tanks/crane/scoop) — reserve room for it
-    rig_pad = (max(3, int(hY * 0.30) + 2), max(4, int(hY * 0.40) + 2)) \
-        if spec.hull_class == "miner" else (0, 0)
+    # miners carry external rig gear (shoulders/blade/skirts) — reserve room
+    rig_pad = (2, max(4, hY // 6 + 2)) if spec.hull_class == "miner" else (0, 0)
     pad_x = max(wing_span if spec.wings else 0, rig_pad[0])
     # wings may tilt (di-/anhedral, x-foils) or end in winglets — reserve height
     wing_pad_y = (int(round(wing_span * 0.8)) + max(2, hY // 2)) if spec.wings else 0
