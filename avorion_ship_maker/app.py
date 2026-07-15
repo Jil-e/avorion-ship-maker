@@ -49,8 +49,13 @@ def build_spec(description, hull_class, style, layout, length, width, height,
                engines, wings, wing_kind, fins, bridge, boxiness, armor, detail,
                bevel, functional, material, block_size, scale, symmetry, seed,
                use_colors, primary, secondary, accent, glow) -> ShipSpec:
-    """Compose a spec: description supplies defaults, UI controls override them."""
+    """Compose a spec: description supplies defaults, UI controls override them.
+
+    Anything left on "авто" is rolled per-seed inside the class rules by
+    ``ShipSpec.resolved()`` — that's what makes variants of one class differ.
+    """
     spec = parse_description(description or "")
+    spec.seed = int(seed)   # before height: the relative delta needs the roll
 
     if hull_class != AUTO:
         spec.hull_class = hull_class
@@ -62,8 +67,9 @@ def build_spec(description, hull_class, style, layout, length, width, height,
         spec.length = int(length)
     if width and width > 0:
         spec.width = int(width)
-    if height:  # relative: 0 = auto, +N taller, -N flatter
-        spec.height = max(3, int(spec.height) + int(height))
+    if height:  # relative: 0 = auto, +N taller, -N flatter (on top of the roll)
+        base_h = spec.height if spec.height is not None else spec.resolved().height
+        spec.height = max(3, int(base_h) + int(height))
     if engines is not None and engines >= 0:
         spec.engines = int(engines)
     for val, attr in ((wings, "wings"), (fins, "fins"), (bridge, "bridge")):
@@ -89,7 +95,6 @@ def build_spec(description, hull_class, style, layout, length, width, height,
     spec.block_size = float(block_size)
     spec.scale = float(scale)
     spec.symmetry = bool(symmetry)
-    spec.seed = int(seed)
 
     if use_colors:
         spec.primary, spec.secondary = primary, secondary
@@ -173,12 +178,17 @@ def make_variants(*vals, progress=gr.Progress()):
         vseed = random.randint(1, 999_999)
         vals[_SEED_ARG] = vseed
         try:
-            ship = build_ship(build_spec(*vals))
+            spec = build_spec(*vals)
+            ship = build_ship(spec)
             if not ship.blocks:
                 continue
             png = os.path.join(_EXPORT_DIR, f"variant_{vseed}.png")
             save_preview(ship, png, figsize=3.2)
-            thumbs.append((png, f"seed {vseed}"))
+            rs = spec.resolved()
+            cap = f"{rs.length}×{rs.width}×{rs.height} · дв. {rs.engines}"
+            if ship.layout:
+                cap += f" · {LAYOUT_NAMES.get(ship.layout, ship.layout)}"
+            thumbs.append((png, cap))
             seeds.append(vseed)
         except Exception:
             continue
@@ -305,9 +315,9 @@ def build_ui() -> gr.Blocks:
 
                 with gr.Accordion("📐 Размеры и масштаб", open=False):
                     length = gr.Slider(0, 120, 0, step=1, label="Длина, вокселей",
-                                       info="0 — авто по классу")
+                                       info="0 — авто: у каждого варианта своя, по правилам класса")
                     width = gr.Slider(0, 60, 0, step=1, label="Ширина, вокселей",
-                                      info="0 — авто по классу")
+                                      info="0 — авто: у каждого варианта своя, по правилам класса")
                     height = gr.Slider(-20, 20, 0, step=1, label="Высота, поправка",
                                        info="0 — авто · −N ниже · +N выше")
                     with gr.Row():
@@ -324,7 +334,7 @@ def build_ui() -> gr.Blocks:
                     detail = gr.Slider(-1, 1, -1, step=0.05, label="Детализация",
                                        info="−1 — авто · полосы свечения и акценты на обшивке")
                     engines = gr.Slider(-1, 6, -1, step=1, label="Двигатели",
-                                        info="−1 — авто по классу")
+                                        info="−1 — авто: случайное число по правилам класса")
                     with gr.Row():
                         wings = gr.Radio(yn, value=AUTO, label="Крылья")
                         fins = gr.Radio(yn, value=AUTO, label="Кили")

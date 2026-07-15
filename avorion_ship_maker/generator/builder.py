@@ -41,7 +41,7 @@ _LAYOUT_WEIGHTS = {
     "cruiser":    (("mono", 3), ("keel", 3), ("pods", 2), ("twin", 1), ("hammer", 2), ("fork", 1)),
     "battleship": (("mono", 3), ("keel", 4), ("pods", 1), ("twin", 1), ("hammer", 3)),
     "freighter":  (("mono", 3), ("twin", 3), ("keel", 2), ("pods", 1), ("hammer", 2)),
-    "miner":      (("mono", 4), ("twin", 3), ("keel", 2), ("pods", 1), ("hammer", 1)),
+    "miner":      (("mono", 3), ("twin", 2), ("keel", 2), ("pods", 2), ("hammer", 1), ("fork", 3)),
     "carrier":    (("mono", 2), ("pods", 4), ("twin", 2), ("keel", 1), ("hammer", 3)),
     "station":    (("mono", 1),),
 }
@@ -199,7 +199,8 @@ def _paint_hull(g: VoxelGrid, spec: ShipSpec, layout: str, rng: random.Random) -
                     hh[body], pexp[body], R_HULL, **belly(hh[body], pexp[body]))
         sl = slice(max(0, zc - 2), Z)
         p_hw = np.maximum(hw[sl] * 0.30, 1.0)
-        off = np.maximum(hw[sl] * 0.62, base_hw * 0.30)
+        # keep a visible slot between the prongs even on narrow rolled hulls
+        off = np.maximum(np.maximum(hw[sl] * 0.62, base_hw * 0.30), p_hw + 1.6)
         p_hh = np.maximum(hh[sl] * 0.45, 1.0)
         ncy = cy + yoff[sl]
         g.fill_tube(cx - off, ncy, p_hw, p_hh, 2.6, R_HULL, z0=sl.start)

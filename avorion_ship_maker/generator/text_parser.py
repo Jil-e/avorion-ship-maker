@@ -10,7 +10,7 @@ import re
 
 from ..blocks import material_id
 from .palette import NAMED_COLORS
-from .spec import HULL_CLASSES, ShipSpec
+from .spec import ShipSpec, class_baseline
 
 CLASS_KEYWORDS: dict[str, list[str]] = {
     "fighter":    ["fighter", "interceptor", "scout", "истребитель", "перехватчик", "разведчик"],
@@ -131,9 +131,12 @@ def parse_description(text: str) -> ShipSpec:
             spec.material = material_id(canonical)
             break
 
-    # start from class preset dimensions, then apply modifiers
-    base = HULL_CLASSES.get(spec.hull_class, HULL_CLASSES["frigate"])
+    # size words scale the class *baseline*; if the text says nothing about
+    # size, the dimensions stay None and each variant rolls its own inside
+    # the class rules (see ShipSpec.resolved) — that's where variety comes from
+    base = class_baseline(spec.hull_class)
     L, W, H = float(base["length"]), float(base["width"]), float(base["height"])
+    sized = False
 
     mult = 1.0
     if _has(t, _SMALL):
@@ -142,18 +145,20 @@ def parse_description(text: str) -> ShipSpec:
         mult *= 1.5
     if _has(t, _HUGE):
         mult *= 2.2
+    if mult != 1.0:
+        sized = True
     L *= mult; W *= mult; H *= mult
 
     if _has(t, _LONG):
-        L *= 1.3; W *= 0.85
+        L *= 1.3; W *= 0.85; sized = True
     if _has(t, _WIDE):
-        W *= 1.4
+        W *= 1.4; sized = True
     if _has(t, _NARROW):
-        W *= 0.65
+        W *= 0.65; sized = True
     if _has(t, _FLAT):
-        H *= 0.6
+        H *= 0.6; sized = True
     if _has(t, _TALL):
-        H *= 1.5
+        H *= 1.5; sized = True
 
     if _has(t, _BOXY):
         spec.boxiness = 0.95
@@ -166,6 +171,7 @@ def parse_description(text: str) -> ShipSpec:
         m = re.search(key + r"\D{0,6}(\d{1,3})", t)
         if m:
             val = float(m.group(1))
+            sized = True
             if setter == "L":
                 L = val
             elif setter == "W":
@@ -173,9 +179,10 @@ def parse_description(text: str) -> ShipSpec:
             else:
                 H = val
 
-    spec.length = int(max(4, round(L)))
-    spec.width = int(max(3, round(W)))
-    spec.height = int(max(3, round(H)))
+    if sized:
+        spec.length = int(max(4, round(L)))
+        spec.width = int(max(3, round(W)))
+        spec.height = int(max(3, round(H)))
 
     # part toggles
     if _has(t, ["no wings", "wingless", "без крыл", "бескрыл"]):
