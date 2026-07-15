@@ -242,16 +242,16 @@ _T_PLACEHOLDER = (
     'сразу в папку игры.</div></div>')
 
 
-def _turret_spec(kind, size, barrels, style, seed) -> TurretSpec:
+def _turret_spec(kind, size, barrels, style, seed, step=0.01) -> TurretSpec:
     return TurretSpec(kind=kind, size=float(size),
                       barrels=None if barrels is None or int(barrels) <= 0 else int(barrels),
-                      style=style, seed=int(seed))
+                      style=style, seed=int(seed), step=float(step))
 
 
-def turret_generate(kind, size, barrels, style, seed):
+def turret_generate(kind, size, barrels, style, seed, step=0.01):
     """Build one turret design: WebGL preview + game-ready .xml."""
     try:
-        t = build_turret(_turret_spec(kind, size, barrels, style, seed))
+        t = build_turret(_turret_spec(kind, size, barrels, style, seed, step))
         model = t.assembled()
         html = webgl.ship_to_iframe(model, height=460)
         path = os.path.join(_EXPORT_DIR, f"turret_{kind}_{int(seed)}.xml")
@@ -278,7 +278,7 @@ def turret_variants(*vals, progress=gr.Progress()):
         try:
             model = build_turret(_turret_spec(*vals)).assembled()
             png = os.path.join(_EXPORT_DIR, f"turret_{vseed}.png")
-            save_preview(model, png, figsize=2.6)
+            save_preview(model, png, figsize=2.6, azim=122)
             thumbs.append((png, f"seed {vseed}"))
             seeds.append(vseed)
         except Exception:
@@ -298,11 +298,11 @@ def turret_pick(evt: gr.SelectData, seeds, *vals):
     return (*turret_generate(*vals), vals[_T_SEED_ARG])
 
 
-def turret_save_to_game(kind, size, barrels, style, seed):
+def turret_save_to_game(kind, size, barrels, style, seed, step=0.01):
     """Write the design straight into the game's auto-turrets folder."""
     if not os.path.isdir(_GAME_TURRET_DIR):
         return f"⚠️ Папка игры не найдена: `{_GAME_TURRET_DIR}`"
-    t = build_turret(_turret_spec(kind, size, barrels, style, seed))
+    t = build_turret(_turret_spec(kind, size, barrels, style, seed, step))
     name = f"generated_{kind}_{int(seed)}.xml"
     save_turret_xml(t, os.path.join(_GAME_TURRET_DIR, name))
     return f"✅ Сохранено в игру: `{name}` (редактор дизайна турели → загрузить)"
@@ -511,6 +511,9 @@ def build_ui() -> gr.Blocks:
                                 value="military", label="Стиль")
                         t_barrels = gr.Slider(0, 4, 0, step=1, label="Стволы",
                                               info="0 — авто по типу орудия")
+                        t_step = gr.Slider(0.005, 0.1, 0.01, step=0.005,
+                                           label="Шаг сетки",
+                                           info="сетка координат блоков; мельче — аккуратнее детали")
                         t_btn = gr.Button(f"🎲 Подобрать {N_VARIANTS} вариантов",
                                           variant="primary", size="lg")
                         t_info = gr.Markdown("")
@@ -520,7 +523,7 @@ def build_ui() -> gr.Blocks:
                             "Файл кладётся в `ships/auto-turrets` — в игре откройте "
                             "**дизайн турели** (в режиме строительства) и загрузите его.")
 
-                t_inputs = [t_kind, t_size, t_barrels, t_style, t_seed]
+                t_inputs = [t_kind, t_size, t_barrels, t_style, t_seed, t_step]
                 t_outputs = [t_preview, t_download, t_info, t_err]
                 tv_outputs = [t_gal, t_seeds_state] + t_outputs + [t_seed]
 
@@ -528,6 +531,7 @@ def build_ui() -> gr.Blocks:
                 for c in (t_kind, t_size, t_style):
                     c.input(turret_variants, inputs=t_inputs, outputs=tv_outputs)
                 t_barrels.release(turret_variants, inputs=t_inputs, outputs=tv_outputs)
+                t_step.release(turret_generate, inputs=t_inputs, outputs=t_outputs)
                 t_seed.input(turret_generate, inputs=t_inputs, outputs=t_outputs)
                 t_gal.select(turret_pick, inputs=[t_seeds_state] + t_inputs,
                              outputs=t_outputs + [t_seed])
