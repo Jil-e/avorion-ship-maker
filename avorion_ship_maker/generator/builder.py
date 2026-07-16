@@ -1091,14 +1091,20 @@ def _bevel(g: VoxelGrid, spec: ShipSpec, table):
         elif len({orient.AXIS_OF[c] for c in codes}) == 3:
             corners.append((int(i), int(j), int(k), codes, mi))
 
-    # corner voxels CONTINUE the adjacent chamfer run with the SAME edge
-    # wedge whenever possible (the game's own hulls and the reference
-    # turrets do exactly this) — one shape type wrapping the hull instead
-    # of a jumble of wedges + tetrahedra at every junction. A tetrahedron
-    # remains only for isolated corners with no run to continue.
-    _AXV = {0: (0, 0, -1), 1: (0, 0, 1), 2: (0, -1, 0),
-            3: (0, 1, 0), 4: (1, 0, 0), 5: (-1, 0, 0)}
+    # corner voxels (3 exposed faces) are ALWAYS closed with a Corner
+    # tetrahedron whose cut octant equals the exposed octant — its mating
+    # triangle is exactly the adjacent wedge run's cross-section, so it
+    # SEALS the run end. (Round 10e tried "continuation wedges" here: a
+    # wedge only covers two faces, so half of the third face stayed open
+    # and every chamfer run became a see-through triangular tunnel in
+    # game — models/img_2.png.) When the corner sits at the end of a
+    # straight run it ADOPTS that run's key, sharing the run's on/off
+    # decision — a chamfered run always gets its sealing cap and a
+    # skipped (square) run keeps a square corner.
     for i, j, k, codes, mi in corners:
+        lu = orient.bevel_corner_orient(*codes)
+        if lu is None:
+            continue                     # unknown octant: leave the cube
         best = None
         for a in range(3):
             d1, d2 = [c for c in codes if orient.AXIS_OF[c] != a]
@@ -1110,34 +1116,28 @@ def _bevel(g: VoxelGrid, spec: ShipSpec, table):
                 step = [0, 0, 0]
                 step[run_axis] = s
                 nb = (i + step[0], j + step[1], k + step[2])
-                if edge_pair.get(nb) == tuple(sorted((d1, d2))) \
-                        or edge_pair.get(nb) == (d1, d2) \
-                        or edge_pair.get(nb) == (d2, d1):
+                if edge_pair.get(nb) in ((d1, d2), (d2, d1)):
                     score += 1
             if score and (best is None or score > best[0]):
                 best = (score, d1, d2, run_axis)
-        if best is not None:
+        if best is not None:             # cap of a straight run: share its fate
             _, d1, d2, run_axis = best
             key = [mi, j, k]
             key[run_axis] = -1
             pair = min(d1, d2) * 7 + max(d1, d2)
-            lk, u = orient.bevel_edge_orient(d1, d2)
             rk = (key[0], key[1], key[2], pair)
-            entries.append((i, j, k, 1, lk, u, rk))
-        else:
-            lu = orient.bevel_corner_orient(*codes)
-            if lu is None:
-                continue
+        else:                            # isolated corner: its own identity
             rk = (mi, j, k, sum(codes) * 7)
-            entries.append((i, j, k, 2, lu[0], lu[1], rk))
+        entries.append((i, j, k, 2, lu[0], lu[1], rk))
 
     # pass 2: the stochastic skip applies ONLY to long straight runs. On a
     # curved/terraced chine every voxel is its own 1-cell "run", and a
-    # per-voxel roll peppered those edges with square teeth (seen in game);
-    # corners always chamfer — a skipped cap on a chamfered run reads as
-    # a broken tooth too.
+    # per-voxel roll peppered those edges with square teeth (seen in game).
+    # Corner caps carry their run's rk, so a run and its sealing tetrahedra
+    # always decide together — never a chamfered run with a square cap or
+    # a lone tet on a square run.
     for i, j, k, shape, lk, u, rk in entries:
-        if (shape == 1 and run_len.get(rk, 0) >= 3
+        if (run_len.get(rk, 0) >= 3
                 and g.role[i, j, k] not in (R_WING, R_FIN)):
             h = ((rk[0] * 73856093) ^ (rk[1] * 19349663) ^ (rk[2] * 83492791)
                  ^ (rk[3] * 0x9e3779b1) ^ (int(spec.seed) * 2654435761)) & 0x7fffffff
