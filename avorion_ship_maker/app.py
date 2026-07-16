@@ -263,6 +263,31 @@ EXAMPLES = [
 TURRET_KIND_NAMES = {"cannon": "пушка", "chaingun": "автопушка", "laser": "лазер",
                      "railgun": "рельсотрон", "launcher": "ракетная установка"}
 _GAME_TURRET_DIR = os.path.expandvars(r"%APPDATA%\Avorion\ships\auto-turrets")
+_GAME_SHIP_DIR = os.path.expandvars(r"%APPDATA%\Avorion\ships")
+
+
+def ship_save_to_game(*vals):
+    """Write the ship straight into the game's saved-ships folder.
+
+    A bare .xml is enough: the game builds the .meta / .png pair itself the
+    first time it touches the design. We drop our own render next to it so
+    the list shows a thumbnail right away."""
+    if not os.path.isdir(_GAME_SHIP_DIR):
+        return f"⚠️ Папка игры не найдена: `{_GAME_SHIP_DIR}`"
+    try:
+        spec = build_spec(*vals)
+        ship = build_ship(spec)
+        if not ship.blocks:
+            return "⚠️ Пустой корпус — нечего сохранять."
+        from .xml_io import save_xml
+        name = f"{_safe_name(spec.name)}_{int(spec.seed)}.xml"
+        path = os.path.join(_GAME_SHIP_DIR, name)
+        save_xml(ship, path)
+        save_preview(ship, path + ".png", figsize=4.0, azim=122)
+        return (f"✅ Сохранено в игру: `{name}` — в режиме строительства "
+                f"выберите «Сохранённые корабли» и загрузите его")
+    except Exception as exc:
+        return f"⚠️ Ошибка: {exc}"
 
 _T_PLACEHOLDER = (
     '<div style="height:460px;display:flex;flex-direction:column;gap:10px;align-items:center;'
@@ -422,7 +447,9 @@ def build_ui() -> gr.Blocks:
                             allow_preview=False, elem_id="variants-gallery")
                         with gr.Row():
                             download = gr.DownloadButton("⬇️ Скачать чертёж .xml", variant="primary")
+                            to_game = gr.Button("🎮 Положить в папку игры")
                             preview_file = gr.DownloadButton("🌐 3D-превью отдельным .html")
+                        saved_msg = gr.Markdown("")
                         with gr.Accordion("📊 Состав корабля", open=False):
                             stats = gr.Markdown("")
 
@@ -538,6 +565,8 @@ def build_ui() -> gr.Blocks:
                         pass  # Enter is handled by .submit above
                     else:
                         c.input(generate, inputs=inputs, outputs=outputs)
+                to_game.click(ship_save_to_game, inputs=inputs,
+                              outputs=[saved_msg])
 
             # ------------------------------------------------- turret designer
             with gr.Tab("🎯 Турель"):
