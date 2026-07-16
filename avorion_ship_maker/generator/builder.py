@@ -1014,6 +1014,9 @@ def _bevel(g: VoxelGrid, spec: ShipSpec, table):
     expcount = sum(exposed[c].astype(np.int8) for c in _FACE_CODES)
     cand = np.argwhere(bevelable & (expcount >= 2) & (expcount <= 3))
 
+    # pass 1: collect entries so run lengths are known before deciding
+    entries = []
+    run_len: dict[tuple, int] = {}
     for (i, j, k) in cand:
         codes = [c for c in _FACE_CODES if exposed[c][i, j, k]]
         mi = min(int(i), X - 1 - int(i))
@@ -1021,8 +1024,7 @@ def _bevel(g: VoxelGrid, spec: ShipSpec, table):
             d1, d2 = codes
             if orient.AXIS_OF[d1] == orient.AXIS_OF[d2]:
                 continue  # opposite faces (a slab), not a convex edge
-            # ONE decision per whole edge run, not per voxel: collapsing the
-            # run-axis coordinate keeps chamfers continuous (no lone teeth)
+            # one identity per whole straight edge run: collapse the run axis
             run_axis = ({0, 1, 2} - {orient.AXIS_OF[d1], orient.AXIS_OF[d2]}).pop()
             key = [mi, int(j), int(k)]
             key[run_axis] = -1
@@ -1039,11 +1041,21 @@ def _bevel(g: VoxelGrid, spec: ShipSpec, table):
             pair = sum(codes) * 7
             lk, u = lu
             shape = 2
-        # thin plates (wings/fins) chamfer deterministically along the whole
-        # edge — a stochastic bevel leaves them ragged
-        if g.role[i, j, k] not in (R_WING, R_FIN):
-            h = ((key[0] * 73856093) ^ (key[1] * 19349663) ^ (key[2] * 83492791)
-                 ^ (pair * 0x9e3779b1) ^ (int(spec.seed) * 2654435761)) & 0x7fffffff
+        rk = (key[0], key[1], key[2], pair)
+        if shape == 1:
+            run_len[rk] = run_len.get(rk, 0) + 1
+        entries.append((int(i), int(j), int(k), shape, lk, u, rk))
+
+    # pass 2: the stochastic skip applies ONLY to long straight runs. On a
+    # curved/terraced chine every voxel is its own 1-cell "run", and a
+    # per-voxel roll peppered those edges with square teeth (seen in game);
+    # corners always chamfer — a skipped cap on a chamfered run reads as
+    # a broken tooth too.
+    for i, j, k, shape, lk, u, rk in entries:
+        if (shape == 1 and run_len.get(rk, 0) >= 3
+                and g.role[i, j, k] not in (R_WING, R_FIN)):
+            h = ((rk[0] * 73856093) ^ (rk[1] * 19349663) ^ (rk[2] * 83492791)
+                 ^ (rk[3] * 0x9e3779b1) ^ (int(spec.seed) * 2654435761)) & 0x7fffffff
             if (h % 1000) / 1000.0 >= spec.bevel:
                 continue
         kind[i, j, k] = shape
