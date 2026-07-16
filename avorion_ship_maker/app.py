@@ -8,6 +8,7 @@ controls on the right, download the Avorion-ready ``.xml``. Run with::
 """
 from __future__ import annotations
 
+import inspect
 import os
 import random
 import re
@@ -140,8 +141,9 @@ def _stats_md(ship, spec) -> str:
         for idx, n in sorted(counts.items(), key=lambda kv: -kv[1])
     )
     lay = LAYOUT_NAMES.get(ship.layout, ship.layout or "—")
+    pitch = f" · **Шаг:** {ship.pitch:g} (сетка 0.25)" if getattr(ship, "pitch", None) else ""
     return (f"**Блоков:** {len(ship)} · **Компоновка:** {lay} · "
-            f"**Габариты (Д×Ш×В):** {dz} × {dx} × {dy}\n\n"
+            f"**Габариты (Д×Ш×В):** {dz} × {dx} × {dy}{pitch}\n\n"
             f"| Блок | index | шт. |\n|---|---|---|\n{rows}")
 
 
@@ -264,6 +266,7 @@ TURRET_KIND_NAMES = {"cannon": "пушка", "chaingun": "автопушка", "
                      "railgun": "рельсотрон", "launcher": "ракетная установка"}
 _GAME_TURRET_DIR = os.path.expandvars(r"%APPDATA%\Avorion\ships\auto-turrets")
 _GAME_SHIP_DIR = os.path.expandvars(r"%APPDATA%\Avorion\ships")
+_N_SPEC_ARGS = len(inspect.signature(build_spec).parameters)
 
 
 def ship_save_to_game(*vals):
@@ -271,7 +274,11 @@ def ship_save_to_game(*vals):
 
     A bare .xml is enough: the game builds the .meta / .png pair itself the
     first time it touches the design. We drop our own render next to it so
-    the list shows a thumbnail right away."""
+    the list shows a thumbnail right away. An extra trailing value (beyond
+    build_spec's arity) is the custom file name from the UI."""
+    custom_name = ""
+    if len(vals) > _N_SPEC_ARGS:
+        *vals, custom_name = vals
     if not os.path.isdir(_GAME_SHIP_DIR):
         return f"⚠️ Папка игры не найдена: `{_GAME_SHIP_DIR}`"
     try:
@@ -280,8 +287,13 @@ def ship_save_to_game(*vals):
         if not ship.blocks:
             return "⚠️ Пустой корпус — нечего сохранять."
         from .xml_io import save_xml
-        name = f"{_safe_name(spec.name)}_{int(spec.seed)}.xml"
+        stem = _safe_name(custom_name) if str(custom_name or "").strip() \
+            else f"{_safe_name(spec.name)}_{int(spec.seed)}"
+        name = f"{stem}.xml"
         path = os.path.join(_GAME_SHIP_DIR, name)
+        for stale in (path + ".meta",):     # game caches geometry in .meta
+            if os.path.exists(stale):
+                os.remove(stale)
         save_xml(ship, path)
         save_preview(ship, path + ".png", figsize=4.0, azim=122)
         return (f"✅ Сохранено в игру: `{name}` — в режиме строительства "
@@ -448,6 +460,9 @@ def build_ui() -> gr.Blocks:
                         with gr.Row():
                             download = gr.DownloadButton("⬇️ Скачать чертёж .xml", variant="primary")
                             to_game = gr.Button("🎮 Положить в папку игры")
+                            ship_name = gr.Textbox("", label="Имя файла в игре",
+                                                   placeholder="пусто — Generated_Ship_<seed>",
+                                                   max_lines=1, scale=1)
                             preview_file = gr.DownloadButton("🌐 3D-превью отдельным .html")
                         saved_msg = gr.Markdown("")
                         with gr.Accordion("📊 Состав корабля", open=False):
@@ -494,10 +509,10 @@ def build_ui() -> gr.Blocks:
                             height = gr.Slider(-20, 20, 0, step=1, label="Высота, поправка",
                                                info="0 — авто · −N ниже · +N выше")
                             with gr.Row():
-                                block_size = gr.Slider(0.25, 4.0, 1.0, step=0.05, label="Шаг сетки",
-                                                       info="размер одного блока в метрах игры")
+                                block_size = gr.Slider(0.25, 4.0, 1.0, step=0.25, label="Шаг сетки",
+                                                       info="размер блока в метрах; кратно 0.25 — сетке игры")
                                 scale = gr.Slider(0.25, 5.0, 1.0, step=0.05, label="Масштаб",
-                                                  info="умножает весь корабль целиком")
+                                                  info="умножает весь корабль; итоговый шаг округлится до 0.25")
 
                         with gr.Accordion("🔧 Форма и части", open=False):
                             boxiness = gr.Slider(-1, 1, -1, step=0.05, label="Сечение корпуса",
@@ -565,7 +580,7 @@ def build_ui() -> gr.Blocks:
                         pass  # Enter is handled by .submit above
                     else:
                         c.input(generate, inputs=inputs, outputs=outputs)
-                to_game.click(ship_save_to_game, inputs=inputs,
+                to_game.click(ship_save_to_game, inputs=inputs + [ship_name],
                               outputs=[saved_msg])
 
             # ------------------------------------------------- turret designer

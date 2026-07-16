@@ -37,7 +37,7 @@ class Role(str, Enum):
     ASSEMBLY = "assembly"         # index 17
     GLOW = "glow"                 # index 150 — glow (full cube, emissive)
     LIGHT = "light"               # index 61
-    TURRET_BASE = "turret_base"   # index 25 — turret mounting socket
+    TURRET_BASE = "turret_base"   # index 20 — turret mounting socket
 
 
 # Role -> Avorion block *type* index. Verified against Greatheart's community
@@ -68,13 +68,16 @@ ROLE_INDEX: dict[Role, int] = {
     Role.ASSEMBLY: 17,
     Role.GLOW: 150,
     Role.LIGHT: 61,
-    Role.TURRET_BASE: 25,
+    # GROUND TRUTH: the game's own plans (data/plans/*) and pads the game
+    # binds real turret designs to all use 20; none use 25.
+    Role.TURRET_BASE: 20,
 }
 
 # index -> human name, for the full known catalog (full-cube blocks + note on shapes).
 BLOCK_NAMES: dict[int, str] = {
     1: "Hull", 2: "Blank Hull", 3: "Engine", 4: "Stone", 5: "Cargo Bay",
-    6: "Crew Quarters", 7: "Thruster", 8: "Armour", 9: "Framework", 10: "Hangar", 25: "Turret Base",
+    6: "Crew Quarters", 7: "Thruster", 8: "Armour", 9: "Framework", 10: "Hangar",
+    20: "Turret Base", 25: "Armored Turret Base",
     13: "Directional Thruster", 14: "Gyro Array", 15: "Inertia Dampener", 17: "Assembly",
     50: "Shield Generator", 51: "Battery", 52: "Generator", 53: "Integrity Field Generator",
     54: "Computer Core", 55: "Hyperspace Core", 61: "Light",

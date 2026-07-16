@@ -13,7 +13,11 @@ from collections import deque
 
 import numpy as np
 
+from .blocks import SHAPE_VARIANTS
 from .model import Block
+
+# shape-block type ids (wedges/corners) — legal but odd as a root block
+_SHAPE_IDX = {i for pair in SHAPE_VARIANTS.values() for i in pair}
 
 
 def build_parents(blocks: list[Block], eps: float = 1e-4) -> list[int]:
@@ -30,8 +34,14 @@ def build_parents(blocks: list[Block], eps: float = 1e-4) -> list[int]:
     centers = (lo + hi) / 2.0
     vol = np.prod(hi - lo, axis=1)
 
-    # Root: a central, sizeable block (near the x=0 / z=0 spine).
-    score = np.abs(centers[:, 0]) + np.abs(centers[:, 2]) - 0.001 * vol
+    # Root: prefer a solid full block CONTAINING the origin — the game anchors
+    # a design at its root block (a founder ship's root is a cube at 0,0,0),
+    # so a canonical centre root keeps "apply design" predictable. Fall back
+    # to a central, sizeable block.
+    contains0 = ((lo <= eps) & (hi >= -eps)).all(axis=1)
+    is_shape = np.array([b.index in _SHAPE_IDX for b in blocks])
+    score = (np.abs(centers[:, 0]) + np.abs(centers[:, 2]) - 0.001 * vol
+             - 1000.0 * contains0 + 500.0 * is_shape)
     root = int(np.argmin(score))
 
     parents = [-1] * n

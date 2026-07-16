@@ -98,6 +98,7 @@ class ShipModel:
     blocks: list[Block] = field(default_factory=list)
     name: str = "Ship"
     layout: str | None = None   # hull archetype the builder used (mono/twin/...)
+    pitch: float | None = None  # effective block pitch in game units (0.25-grid)
 
     def add(self, block: Block) -> Block:
         self.blocks.append(block)

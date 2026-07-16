@@ -295,9 +295,15 @@ def _carve(g: VoxelGrid, xr, yr, zr, role: int) -> None:
 
 
 def _add_engines(g: VoxelGrid, spec: ShipSpec, hull: tuple[int, int],
-                 rng: random.Random) -> None:
+                 rng: random.Random, wall: bool = False) -> None:
     """Carve engine bays into the stern. Engines are distributed over the
-    occupied x-clusters there, so twin hulls / nacelles each get their own."""
+    occupied x-clusters there, so twin hulls / nacelles each get their own.
+
+    ``wall=True`` (industrial hulls) trades the small round nozzles for a
+    monolithic engine wall: each stern cluster becomes a few BIG engine
+    slabs spanning its full cross-section, glow face across the whole stern
+    — the way players build miners/freighters (CAT-style, few large blocks).
+    """
     n = max(int(spec.engines), 0)
     if n == 0:
         return
@@ -317,6 +323,16 @@ def _add_engines(g: VoxelGrid, spec: ShipSpec, hull: tuple[int, int],
         runs.append((s, p))
         s = p = int(x)
     runs.append((s, p))
+    if wall:
+        elen = max(3, int(round(Z * 0.15)))
+        for a, b in runs:
+            # full occupied y-extent of this cluster near the stern
+            ys = np.where(g.occ[a:b + 1, :, 1:elen + 1].any(axis=(0, 2)))[0]
+            if not len(ys):
+                continue
+            _carve(g, (a, b), (int(ys[0]), int(ys[-1])), (0, elen), R_ENGINE)
+            _carve(g, (a, b), (int(ys[0]), int(ys[-1])), (0, 0), R_ENGINE_GLOW)
+        return
     widths = [b - a + 1 for a, b in runs]
     total = sum(widths)
     counts = ([max(1, round(n * w / total)) for w in widths]
@@ -375,18 +391,22 @@ def _hull_tops(g: VoxelGrid, xr, zr) -> dict[tuple[int, int], int]:
 
 def _add_turret_mounts(g: VoxelGrid, spec: ShipSpec, hull: tuple[int, int],
                        rng: random.Random) -> None:
-    """Turret-base pads (block type 25) on flat dorsal hull spots.
+    """Turret-base pads (block type 20) on flat dorsal hull spots.
 
-    Each pad greedy-merges into a single block the game treats as a turret
-    socket. Odd counts get a centreline pad; the rest go on the port flank
-    and the symmetry pass mirrors them into port/starboard pairs.
+    Pads are elongated fore-aft (the way players build them: ~1x2 plates
+    along the mount axis) and each greedy-merges into a single block the
+    game treats as a turret socket. Odd counts get a centreline pad; the
+    rest go on the port flank — centred on the OUTERMOST occupied hull
+    cluster, so on claw layouts (crab/fork) they land right on the claw
+    tops — and the symmetry pass mirrors them into port/starboard pairs.
     """
     n = max(int(spec.turrets), 0)
     if n == 0:
         return
     hX, hY = hull
     cx = (g.X - 1) // 2
-    p = max(1, min(3, hX // 9))          # pad edge length, voxels
+    p = max(1, min(3, hX // 9))          # pad width, voxels
+    pl = max(2, 2 * p)                   # pad length (fore-aft), voxels
     ok_roles = (R_HULL, R_ARMOR)
 
     def place(x0, x1, z0, z1):
@@ -407,20 +427,36 @@ def _add_turret_mounts(g: VoxelGrid, spec: ShipSpec, hull: tuple[int, int],
     want_pairs = n // 2
     want_center = n % 2
     w2 = p // 2                          # centre pads span 2*w2+1 columns
-    for z0 in range(int(g.Z * 0.88) - p, int(g.Z * 0.22), -(p + 2)):
+    for z0 in range(int(g.Z * 0.88) - pl, int(g.Z * 0.22), -(pl + 2)):
         if want_center + want_pairs == 0:
             break
-        z1 = z0 + p - 1
+        z1 = z0 + pl - 1
         if want_center and place(cx - w2, cx + w2, z0, z1):
             want_center = 0
             continue
         if want_pairs:
             row = np.where(g.occ[:, :, z0].any(axis=1))[0]
-            if not len(row):
+            left = row[row <= cx]
+            if not len(left):
                 continue
-            half_w = min(cx - int(row[0]), hX * 0.5)
-            x1 = cx - max(2, int(half_w * 0.5))
-            if place(x1 - p + 1, x1, z0, z1):
+            # occupied x-clusters on the port side; the outermost one is the
+            # claw / flank ridge — that's where players put miner pads
+            runs, st, pr = [], int(left[0]), int(left[0])
+            for x in left[1:]:
+                if x == pr + 1:
+                    pr = int(x)
+                    continue
+                runs.append((st, pr))
+                st = pr = int(x)
+            runs.append((st, pr))
+            a, b = runs[0]
+            xm = (a + b) // 2
+            placed = place(max(a, xm - w2), min(b, max(a, xm - w2) + p - 1), z0, z1)
+            if not placed:                       # fall back to the inner flank
+                half_w = min(cx - int(row[0]), hX * 0.5)
+                x1 = cx - max(2, int(half_w * 0.5))
+                placed = place(x1 - p + 1, x1, z0, z1)
+            if placed:
                 want_pairs -= 1
 
 
@@ -931,6 +967,10 @@ def _functional(g: VoxelGrid, spec: ShipSpec) -> None:
                 "agile" if spec.hull_class in ("fighter", "corvette") else
                 "balanced")
     p_m, g_m, c_m, t_m = _FUNC_PROFILES[prof]
+    if hauler:
+        # lesson from the user's hand edits: a working hauler wants more
+        # power and fewer crew quarters than the balanced fill gives it
+        p_m *= 1.3
     sq = np.sqrt
 
     def zone(z0, z1, role, wf, hf):
@@ -950,10 +990,22 @@ def _functional(g: VoxelGrid, spec: ShipSpec) -> None:
         zone(Z * 0.50, Z * 0.60, R_SHIELD, w * 0.5, w * 0.5)
     if (hauler or c_m > 1.0) and c_m > 0:
         zone(Z * 0.46, Z * 0.62, R_CARGO, w * sq(c_m), w * sq(c_m))
-    zone(Z * 0.60, Z * 0.82, R_CREW, w * (0.7 if prof == "agile" else 1.0), w)
+    crew_w = 0.7 if prof == "agile" else 0.6 if hauler else 1.0
+    zone(Z * 0.60, Z * 0.82, R_CREW, w * crew_w, w)
 
     # maneuvering thrusters on the port/starboard *surface* (outermost voxel)
     occ = g.occ
+    # heavy hulls: tall thruster columns at the stern quarters — braking and
+    # turning authority for a big slow ship (from the user's hand edits)
+    if hauler:
+        ys_occ = np.where(occ.any(axis=(0, 2)))[0]
+        jr = max(2, (int(ys_occ[-1]) - int(ys_occ[0])) // 3) if len(ys_occ) else 2
+        for k in range(int(Z * 0.28), int(Z * 0.42)):
+            for j in range(max(0, cy - jr), min(Y, cy + jr + 1)):
+                row = np.where(occ[:, j, k])[0]
+                if len(row):
+                    g.role[row[0], j, k] = R_THRUST
+                    g.role[row[-1], j, k] = R_THRUST
     rows = 1 + t_m                       # band half-height in voxel rows
     for k in range(int(Z * 0.24), int(Z * (0.46 if t_m == 1 else 0.54))):
         for j in range(max(0, cy - rows), min(Y, cy + rows + 1)):
@@ -1133,7 +1185,8 @@ def build_ship(spec: ShipSpec) -> ShipModel:
 
     _paint_hull(g, spec, layout, _rng("hull"))
 
-    _add_engines(g, spec, (hX, hY), _rng("engines"))
+    _add_engines(g, spec, (hX, hY), _rng("engines"),
+                 wall=spec.hull_class in ("miner", "freighter") or layout == "crab")
     _add_bridge(g, spec, (hX, hY), cab_h, _rng("bridge"))
     _add_wings(g, spec, wing_span, (hX, hY), _rng("wings"))
     _add_fins(g, spec, fin_h, (hX, hY), _rng("fins"))
@@ -1149,14 +1202,22 @@ def build_ship(spec: ShipSpec) -> ShipModel:
     table = _attr_table(spec)
     shape_kind, look_arr, up_arr = _bevel(g, spec, table)
 
-    s = spec.block_size * spec.scale
+    # the game's build grid is 0.25: quantize the voxel pitch to it and anchor
+    # the lattice so EVERY block face lands on a 0.25 multiple — hand-placed
+    # blocks in game then butt flush against generated ones (grid snapping)
+    GRID = 0.25
+    s = max(GRID, round(spec.block_size * spec.scale / GRID) * GRID)
+    sh_x = round(X / 2 * s / GRID) * GRID   # ~centred, but on the 0.25 lattice
+    sh_y = round(Y / 2 * s / GRID) * GRID
+    sh_z = round(Z / 2 * s / GRID) * GRID
     ship = ShipModel(name=spec.name)
     ship.layout = layout   # remembered for the UI stats line
+    ship.pitch = s         # effective block pitch, for the UI stats line
 
     def emit(i0, i1, j0, j1, k0, k1, idx, color, mat, look, up):
         ship.add(Block(
-            lx=(i0 - X / 2) * s, ly=(j0 - Y / 2) * s, lz=(k0 - Z / 2) * s,
-            ux=(i1 + 1 - X / 2) * s, uy=(j1 + 1 - Y / 2) * s, uz=(k1 + 1 - Z / 2) * s,
+            lx=i0 * s - sh_x, ly=j0 * s - sh_y, lz=k0 * s - sh_z,
+            ux=(i1 + 1) * s - sh_x, uy=(j1 + 1) * s - sh_y, uz=(k1 + 1) * s - sh_z,
             index=idx, material=mat, look=look, up=up, color=color, secondary="00000000",
         ))
 
@@ -1164,6 +1225,16 @@ def build_ship(spec: ShipSpec) -> ShipModel:
     cube_attr = np.where(g.occ & (shape_kind == 0), g.role, EMPTY).astype(np.int32)
     for (i0, i1, j0, j1, k0, k1, rid) in greedy_merge(cube_attr):
         idx, color, look, mat = table.get(rid, table[R_HULL])
+        if rid == R_TURRET:
+            # turret sockets are thin plates hugging the hull top (the way
+            # players build them), not full-voxel cubes towering over it
+            ship.add(Block(
+                lx=i0 * s - sh_x, ly=j0 * s - sh_y, lz=k0 * s - sh_z,
+                ux=(i1 + 1) * s - sh_x, uy=j0 * s - sh_y + GRID,
+                uz=(k1 + 1) * s - sh_z,
+                index=idx, material=mat, look=look, up=3,
+                color=color, secondary="00000000"))
+            continue
         emit(i0, i1, j0, j1, k0, k1, idx, color, mat, look, 3)
 
     # beveled voxels emit individually as edge/corner shape blocks
