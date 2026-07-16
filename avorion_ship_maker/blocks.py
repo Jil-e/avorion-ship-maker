@@ -78,8 +78,9 @@ BLOCK_NAMES: dict[int, str] = {
     13: "Directional Thruster", 14: "Gyro Array", 15: "Inertia Dampener", 17: "Assembly",
     50: "Shield Generator", 51: "Battery", 52: "Generator", 53: "Integrity Field Generator",
     54: "Computer Core", 55: "Hyperspace Core", 61: "Light",
-    100: "Hull Edge", 101: "Hull Corner", 102: "Hull Inv. Corner", 103: "Hull Centered Corner",
-    104: "Armour Edge", 105: "Armour Corner", 106: "Armour Inv. Corner", 150: "Glow",
+    100: "Hull Edge", 101: "Hull Corner", 102: "Hull Outer Corner", 103: "Hull Inner Corner",
+    104: "Armour Edge", 105: "Armour Corner", 106: "Armour Outer Corner",
+    107: "Armour Inner Corner", 150: "Glow",
 }
 
 # All block-type indices seen in the reference ships — the "known-valid" set.

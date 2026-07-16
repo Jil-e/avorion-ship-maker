@@ -1017,6 +1017,8 @@ def _bevel(g: VoxelGrid, spec: ShipSpec, table):
     # pass 1: collect entries so run lengths are known before deciding
     entries = []
     run_len: dict[tuple, int] = {}
+    edge_pair: dict[tuple, tuple] = {}   # (i,j,k) -> its exposed face pair
+    corners = []
     for (i, j, k) in cand:
         codes = [c for c in _FACE_CODES if exposed[c][i, j, k]]
         mi = min(int(i), X - 1 - int(i))
@@ -1030,21 +1032,52 @@ def _bevel(g: VoxelGrid, spec: ShipSpec, table):
             key[run_axis] = -1
             pair = min(d1, d2) * 7 + max(d1, d2)
             lk, u = orient.bevel_edge_orient(d1, d2)
-            shape = 1
-        else:  # 3 exposed faces
-            if len({orient.AXIS_OF[c] for c in codes}) < 3:
+            rk = (key[0], key[1], key[2], pair)
+            run_len[rk] = run_len.get(rk, 0) + 1
+            edge_pair[(int(i), int(j), int(k))] = (d1, d2)
+            entries.append((int(i), int(j), int(k), 1, lk, u, rk))
+        elif len({orient.AXIS_OF[c] for c in codes}) == 3:
+            corners.append((int(i), int(j), int(k), codes, mi))
+
+    # corner voxels CONTINUE the adjacent chamfer run with the SAME edge
+    # wedge whenever possible (the game's own hulls and the reference
+    # turrets do exactly this) — one shape type wrapping the hull instead
+    # of a jumble of wedges + tetrahedra at every junction. A tetrahedron
+    # remains only for isolated corners with no run to continue.
+    _AXV = {0: (0, 0, -1), 1: (0, 0, 1), 2: (0, -1, 0),
+            3: (0, 1, 0), 4: (1, 0, 0), 5: (-1, 0, 0)}
+    for i, j, k, codes, mi in corners:
+        best = None
+        for a in range(3):
+            d1, d2 = [c for c in codes if orient.AXIS_OF[c] != a]
+            if orient.AXIS_OF[d1] == orient.AXIS_OF[d2]:
                 continue
+            run_axis = ({0, 1, 2} - {orient.AXIS_OF[d1], orient.AXIS_OF[d2]}).pop()
+            score = 0
+            for s in (1, -1):
+                step = [0, 0, 0]
+                step[run_axis] = s
+                nb = (i + step[0], j + step[1], k + step[2])
+                if edge_pair.get(nb) == tuple(sorted((d1, d2))) \
+                        or edge_pair.get(nb) == (d1, d2) \
+                        or edge_pair.get(nb) == (d2, d1):
+                    score += 1
+            if score and (best is None or score > best[0]):
+                best = (score, d1, d2, run_axis)
+        if best is not None:
+            _, d1, d2, run_axis = best
+            key = [mi, j, k]
+            key[run_axis] = -1
+            pair = min(d1, d2) * 7 + max(d1, d2)
+            lk, u = orient.bevel_edge_orient(d1, d2)
+            rk = (key[0], key[1], key[2], pair)
+            entries.append((i, j, k, 1, lk, u, rk))
+        else:
             lu = orient.bevel_corner_orient(*codes)
             if lu is None:
                 continue
-            key = [mi, int(j), int(k)]
-            pair = sum(codes) * 7
-            lk, u = lu
-            shape = 2
-        rk = (key[0], key[1], key[2], pair)
-        if shape == 1:
-            run_len[rk] = run_len.get(rk, 0) + 1
-        entries.append((int(i), int(j), int(k), shape, lk, u, rk))
+            rk = (mi, j, k, sum(codes) * 7)
+            entries.append((i, j, k, 2, lu[0], lu[1], rk))
 
     # pass 2: the stochastic skip applies ONLY to long straight runs. On a
     # curved/terraced chine every voxel is its own 1-cell "run", and a
