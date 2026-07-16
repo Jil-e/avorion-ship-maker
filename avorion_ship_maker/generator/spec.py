@@ -72,6 +72,12 @@ LAYOUT_NAMES = {"mono": "монокорпус", "twin": "катамаран",
 WING_KINDS: tuple[str, ...] = ("swept", "forward", "delta", "gull",
                                "xfoil", "tipfin", "tippod", "vpods")
 
+# functional-loadout profiles: how the interior modules are weighted
+# (None/auto => by class: haulers=cargo, fighters/corvettes=agile)
+FUNC_PROFILES: tuple[str, ...] = ("balanced", "agile", "cargo", "power")
+FUNC_PROFILE_NAMES = {"balanced": "сбалансированный", "agile": "манёвренный",
+                      "cargo": "грузовой", "power": "энергетический"}
+
 
 @dataclass
 class ShipSpec:
@@ -100,6 +106,7 @@ class ShipSpec:
     detail: float | None = None         # amount of surface greebles + glow accents
     bevel: float | None = None          # 0=blocky cubes, 1=chamfer all convex edges/corners
     functional: float | None = None     # 0=pure aesthetics, 1=max operable-block content
+    func_profile: str | None = None     # balanced/agile/cargo/power; None => by class
 
     # parts
     engines: int | None = None

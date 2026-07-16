@@ -18,8 +18,9 @@ import gradio as gr
 from . import webgl
 from .blocks import BLOCK_NAMES, MATERIALS
 from .generator.builder import build_ship
-from .generator.spec import (HULL_CLASSES, LAYOUT_NAMES, LAYOUTS, STYLES,
-                             WING_KINDS, ShipSpec)
+from .generator.spec import (FUNC_PROFILE_NAMES, FUNC_PROFILES, HULL_CLASSES,
+                             LAYOUT_NAMES, LAYOUTS, STYLES, WING_KINDS,
+                             ShipSpec)
 from .generator.text_parser import parse_description
 from .generator.turret_builder import TURRET_KINDS, TurretSpec, build_turret
 from .preview import save_preview
@@ -52,7 +53,8 @@ def _safe_name(name: str) -> str:
 def build_spec(description, hull_class, style, layout, length, width, height,
                engines, wings, wing_kind, fins, bridge, boxiness, armor, detail,
                bevel, functional, material, block_size, scale, symmetry, seed,
-               use_colors, primary, secondary, accent, glow, turrets=-1) -> ShipSpec:
+               use_colors, primary, secondary, accent, glow, turrets=-1,
+               func_profile=AUTO) -> ShipSpec:
     """Compose a spec: description supplies defaults, UI controls override them.
 
     Anything left on "авто" is rolled per-seed inside the class rules by
@@ -95,6 +97,8 @@ def build_spec(description, hull_class, style, layout, length, width, height,
         spec.bevel = float(bevel)
     if functional is not None and functional >= 0:
         spec.functional = float(functional)
+    if func_profile != AUTO:
+        spec.func_profile = func_profile
     if material != AUTO:
         spec.material = int(material)
 
@@ -117,6 +121,8 @@ def _understood_md(spec: ShipSpec) -> str:
             f"материал **{MATERIAL_NAMES.get(r.material, r.material)}**",
             f"двигателей **{r.engines}**",
             f"турелей **{r.turrets}**"]
+    if r.func_profile:
+        bits.append(f"начинка **{FUNC_PROFILE_NAMES.get(r.func_profile, r.func_profile)}**")
     if r.layout:
         bits.insert(2, f"компоновка **{LAYOUT_NAMES.get(r.layout, r.layout)}**")
     extras = [n for n, on in (("крылья", r.wings), ("кили", r.fins), ("мостик", r.bridge)) if on]
@@ -153,13 +159,15 @@ _PLACEHOLDER = (
 def generate(description, hull_class, style, layout, length, width, height,
              engines, wings, wing_kind, fins, bridge, boxiness, armor, detail,
              bevel, functional, material, block_size, scale, symmetry, seed,
-             use_colors, primary, secondary, accent, glow, turrets=-1):
+             use_colors, primary, secondary, accent, glow, turrets=-1,
+             func_profile=AUTO):
     """Main handler: build the ship, render WebGL preview, write the .xml."""
     try:
         spec = build_spec(description, hull_class, style, layout, length, width, height,
                           engines, wings, wing_kind, fins, bridge, boxiness, armor, detail,
                           bevel, functional, material, block_size, scale, symmetry, seed,
-                          use_colors, primary, secondary, accent, glow, turrets)
+                          use_colors, primary, secondary, accent, glow, turrets,
+                          func_profile)
         ship = build_ship(spec)
         if not ship.blocks:
             raise ValueError("Пустой корпус — увеличьте размеры.")
@@ -438,6 +446,11 @@ def build_ui() -> gr.Blocks:
                                           info="-1 — авто по стилю · 0 — кубы · 1 — гладкий силуэт из клиньев")
                         functional = gr.Slider(0, 1, 0.5, step=0.05, label="Начинка",
                                                info="0 — только внешний вид · 1 — максимум рабочих блоков")
+                        func_profile = gr.Dropdown(
+                            [("авто — по классу", AUTO)] +
+                            [(FUNC_PROFILE_NAMES[k], k) for k in FUNC_PROFILES],
+                            value=AUTO, label="Профиль начинки",
+                            info="манёвренный — гиро-массивы и двойные пояса маневровых")
                         with gr.Accordion("✍️ Описание текстом (опционально)", open=False):
                             desc = gr.Textbox(
                                 label="Опишите корабль",
@@ -493,7 +506,7 @@ def build_ui() -> gr.Blocks:
                 inputs = [desc, hull_class, style, layout, length, width, height, engines, wings,
                           wing_kind, fins, bridge, boxiness, armor, detail, bevel, functional,
                           material, block_size, scale, symmetry, seed, use_colors, primary,
-                          secondary, accent, glow, turrets]
+                          secondary, accent, glow, turrets, func_profile]
                 outputs = [preview, stats, download, understood, err, preview_file]
                 v_outputs = [variants_gal, seeds_state] + outputs + [seed]
 

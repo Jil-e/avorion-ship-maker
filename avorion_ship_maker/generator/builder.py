@@ -896,12 +896,23 @@ def _attr_table(spec: ShipSpec) -> dict[int, tuple[int, str, int, int]]:
     }
 
 
+# profile -> (power, gyro, cargo, thruster) zone multipliers
+_FUNC_PROFILES = {
+    "balanced": (1.0, 1.0, 1.0, 1),
+    "agile":    (1.0, 2.1, 0.0, 2),   # gyro arrays + double thruster bands
+    "cargo":    (0.9, 0.8, 1.9, 1),
+    "power":    (1.8, 0.9, 0.7, 1),
+}
+
+
 def _functional(g: VoxelGrid, spec: ShipSpec) -> None:
     """Fill interior hull with operable tech blocks by zone, scaled by ``functional``.
 
     Vanilla thrust/energy ratios live in the engine (not recoverable), so this uses
     sensible proportions: power (generators/batteries) aft, gyros/integrity/shield
     amidships, crew (and cargo for haulers) forward, thrusters on the flanks.
+    ``func_profile`` reweights the zones — "agile" trades cargo for big gyro
+    arrays and doubled thruster bands so the ship actually turns.
     """
     f = float(np.clip(spec.functional, 0.0, 1.0))
     if f <= 0.001:
@@ -913,6 +924,15 @@ def _functional(g: VoxelGrid, spec: ShipSpec) -> None:
     cx, cy = (X - 1) // 2, (Y - 1) // 2
     w = 0.25 + 0.55 * f
 
+    hauler = spec.hull_class in ("freighter", "miner", "carrier")
+    prof = spec.func_profile
+    if prof not in _FUNC_PROFILES:
+        prof = ("cargo" if hauler else
+                "agile" if spec.hull_class in ("fighter", "corvette") else
+                "balanced")
+    p_m, g_m, c_m, t_m = _FUNC_PROFILES[prof]
+    sq = np.sqrt
+
     def zone(z0, z1, role, wf, hf):
         hw = max(0, int((X * 0.5 - 1) * min(1.0, wf)))
         hh = max(0, int((Y * 0.5 - 1) * min(1.0, hf)))
@@ -921,31 +941,40 @@ def _functional(g: VoxelGrid, spec: ShipSpec) -> None:
         sub = interior[xs:xe, ys:ye, a:b + 1]
         g.role[xs:xe, ys:ye, a:b + 1][sub] = role
 
-    hauler = spec.hull_class in ("freighter", "miner", "carrier")
-    zone(Z * 0.12, Z * 0.34, R_GEN, w, w)             # aft: generators
-    zone(Z * 0.30, Z * 0.42, R_BATTERY, w * 0.85, w * 0.85)
+    zone(Z * 0.12, Z * 0.34, R_GEN, w * sq(p_m), w * sq(p_m))   # aft: power
+    zone(Z * 0.30, Z * 0.42, R_BATTERY, w * 0.85 * sq(p_m), w * 0.85 * sq(p_m))
     zone(Z * 0.34, Z * 0.46, R_INTEGRITY, w * 0.55, w * 0.55)
-    zone(Z * 0.42, Z * 0.52, R_GYRO, w * 0.7, w * 0.7)  # amidships
+    gz1 = Z * (0.56 if g_m > 1.5 else 0.52)                     # amidships: gyros
+    zone(Z * 0.42, gz1, R_GYRO, w * 0.7 * sq(g_m), w * 0.7 * sq(g_m))
     if spec.material >= 2:
         zone(Z * 0.50, Z * 0.60, R_SHIELD, w * 0.5, w * 0.5)
-    if hauler:
-        zone(Z * 0.46, Z * 0.62, R_CARGO, w, w)
-    zone(Z * 0.60, Z * 0.82, R_CREW, w, w)              # forward: crew
+    if (hauler or c_m > 1.0) and c_m > 0:
+        zone(Z * 0.46, Z * 0.62, R_CARGO, w * sq(c_m), w * sq(c_m))
+    zone(Z * 0.60, Z * 0.82, R_CREW, w * (0.7 if prof == "agile" else 1.0), w)
 
     # maneuvering thrusters on the port/starboard *surface* (outermost voxel)
     occ = g.occ
-    for k in range(int(Z * 0.24), int(Z * 0.46)):
-        for j in range(max(0, cy - 1), min(Y, cy + 2)):
+    rows = 1 + t_m                       # band half-height in voxel rows
+    for k in range(int(Z * 0.24), int(Z * (0.46 if t_m == 1 else 0.54))):
+        for j in range(max(0, cy - rows), min(Y, cy + rows + 1)):
             row = np.where(occ[:, j, k])[0]
             if len(row):
                 g.role[row[0], j, k] = R_THRUST
                 g.role[row[-1], j, k] = R_THRUST
+    if t_m > 1:                          # agile: a second band near the bow
+        for k in range(int(Z * 0.60), int(Z * 0.68)):
+            for j in range(max(0, cy - 1), min(Y, cy + 2)):
+                row = np.where(occ[:, j, k])[0]
+                if len(row):
+                    g.role[row[0], j, k] = R_THRUST
+                    g.role[row[-1], j, k] = R_THRUST
     # directional thrusters near the bow flanks
     for k in range(int(Z * 0.70), int(Z * 0.84)):
-        row = np.where(occ[:, cy, k])[0]
-        if len(row):
-            g.role[row[0], cy, k] = R_DIRTHRUST
-            g.role[row[-1], cy, k] = R_DIRTHRUST
+        for j in (range(max(0, cy - 1), min(Y, cy + 2)) if t_m > 1 else (cy,)):
+            row = np.where(occ[:, j, k])[0]
+            if len(row):
+                g.role[row[0], j, k] = R_DIRTHRUST
+                g.role[row[-1], j, k] = R_DIRTHRUST
 
 
 _FACE_CODES = [4, 5, 3, 2, 1, 0]  # +x -x +y -y +z -z  (see orient.INT2VEC)

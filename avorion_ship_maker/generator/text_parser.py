@@ -45,6 +45,22 @@ WING_KIND_KEYWORDS: dict[str, list[str]] = {
               "секции двигат"],
 }
 
+MATERIAL_KEYWORDS: dict[int, list[str]] = {
+    0: ["железо", "железн", "iron"],
+    1: ["титан", "titanium"],
+    2: ["наонит", "naonite"],
+    3: ["триний", "trinium"],
+    4: ["ксанион", "xanion"],
+    5: ["огонит", "ogonite"],
+    6: ["аворион", "avorion"],
+}
+
+PROFILE_KEYWORDS: dict[str, list[str]] = {
+    "agile": ["манёвренн", "маневренн", "юрк", "вертляв", "agile", "nimble"],
+    "cargo": ["грузовместим", "вместительн", "побольше трюм"],
+    "power": ["энерговоор", "мощн реактор", "энергетическ"],
+}
+
 STYLE_KEYWORDS: dict[str, list[str]] = {
     "military":   ["military", "warship", "combat", "battle", "военн", "боев", "воен"],
     "civilian":   ["civilian", "passenger", "yacht", "гражданск", "пассажир", "яхта"],
@@ -100,6 +116,16 @@ def parse_description(text: str) -> ShipSpec:
     for st, keys in STYLE_KEYWORDS.items():
         if _has(t, [k.replace("ё", "е") for k in keys]):
             spec.style = st
+            break
+    # material ("из титана", "наонитовый"...)
+    for mat, keys in MATERIAL_KEYWORDS.items():
+        if _has(t, [k.replace("ё", "е") for k in keys]):
+            spec.material = mat
+            break
+    # functional loadout profile ("манёвренный"...)
+    for prof, keys in PROFILE_KEYWORDS.items():
+        if _has(t, [k.replace("ё", "е") for k in keys]):
+            spec.func_profile = prof
             break
     # hull layout
     for lay, keys in LAYOUT_KEYWORDS.items():

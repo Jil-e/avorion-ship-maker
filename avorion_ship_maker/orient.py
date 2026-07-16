@@ -4,10 +4,13 @@ Avorion orients a block with two integer codes ``look`` and ``up`` (each 0-5,
 selecting one of six axis directions). For full cubes the codes are always the
 default ``look=1, up=3``; for shape blocks (wedges/corners) they aim the slope.
 
-The integer->axis mapping is not published in any game file; it was derived from
-the reference ships (default cube = look1/up3 => +z / +y) and validated by
-re-rendering data/plans/arrow.xml. Keep it in one place so a single tweak (should
-the in-game check disagree) fixes both emission and preview.
+The integer->axis mapping was derived from the reference ships (default cube =
+look1/up3 => +z / +y); the wedge/corner slope semantics are taken VERBATIM from
+the game's own data/scripts/plangenerator/lib/generator.lua: a wedge with
+(look, up) chamfers the corner between its −look and +up faces, and a corner
+block cuts the (−look, +up, −right) octant. Emission (bevel_*_orient) and
+preview decoding (edge_faces/corner_faces) both live here so they can never
+drift apart.
 """
 from __future__ import annotations
 
@@ -37,26 +40,27 @@ def frame(look: int, up: int):
     return L, U, R
 
 
-# ---- edge/corner orientation tables (from generator.lua rounded()/corners) ----
-# Each maps a geometric edge/corner of a box to the (look, up) codes that aim a
-# wedge/corner block's slope outward there. Keys use axis-sign tuples.
-# Edges are named by the two outward faces they sit on.
+# ---- edge/corner orientation tables ------------------------------------------
+# VERIFIED against the game's own data/scripts/plangenerator/lib/generator.lua
+# (lines 161-190): a wedge with (look, up) chamfers the edge between its −look
+# and +up faces; the generator puts the y face (else the x face) in `up` and
+# the other exposed face, NEGATED, in `look`. Keys use the two outward faces.
 EDGE_LOOKUP = {
-    # (Y edges) top/bottom running along Z, on +x/-x
-    ("+x", "+y"): (RG, UP),   # topLeft   -> rgup
-    ("-x", "+y"): (LF, UP),   # topRight  -> lfup
-    ("+x", "-y"): (RG, DN),   # bottomLeft
-    ("-x", "-y"): (LF, DN),
-    # (Y edges) top/bottom running along X, on +z/-z
-    ("+z", "+y"): (BW, UP),   # topFront  -> bwup
-    ("-z", "+y"): (FW, UP),   # topBack   -> fwup
-    ("+z", "-y"): (BW, DN),
-    ("-z", "-y"): (FW, DN),
-    # (Z edges) front/back running along Y, on +x/-x  (derived from arrow.xml)
-    ("+x", "+z"): (RG, FW),
-    ("-x", "+z"): (FW, LF),   # arrow left tip: look=1(+z=FW), up=5(+x=LF)
-    ("+x", "-z"): (BW, RG),
-    ("-x", "-z"): (LF, BW),
+    # (Z edges) top/bottom running along Z, on +x/-x
+    ("+x", "+y"): (RG, UP),   # topLeft     -> rgup
+    ("-x", "+y"): (LF, UP),   # topRight    -> lfup
+    ("+x", "-y"): (RG, DN),   # bottomLeft  -> rgdn
+    ("-x", "-y"): (LF, DN),   # bottomRight -> lfdn
+    # (X edges) top/bottom running along X, on +z/-z
+    ("+z", "+y"): (BW, UP),   # topFront    -> bwup
+    ("-z", "+y"): (FW, UP),   # topBack     -> fwup
+    ("+z", "-y"): (BW, DN),   # bottomFront -> bwdn
+    ("-z", "-y"): (FW, DN),   # bottomBack  -> fwdn
+    # (Y edges) vertical, on +x/-x x +z/-z
+    ("+x", "+z"): (BW, LF),   # frontLeft   -> bwlf
+    ("-x", "+z"): (BW, RG),   # frontRight  -> bwrg
+    ("+x", "-z"): (FW, LF),   # backLeft    -> fwlf
+    ("-x", "-z"): (FW, RG),   # backRight   -> fwrg
 }
 
 CORNER_LOOKUP = {
@@ -78,31 +82,39 @@ def edge_orientation(face_a: str, face_b: str):
 AXIS_OF = {0: 2, 1: 2, 2: 1, 3: 1, 4: 0, 5: 0}  # int code -> axis (0=x,1=y,2=z)
 
 
+_OPP = {0: 1, 1: 0, 2: 3, 3: 2, 4: 5, 5: 4}
+
+
 def bevel_edge_orient(d1: int, d2: int) -> tuple[int, int]:
-    """(look, up) for a wedge that chamfers a convex edge whose two exposed faces
-    point in directions ``d1``/``d2`` (int codes). Removes the (d1,d2) corner."""
-    # prefer the vertical (y) exposed face as `up` for a natural-looking slope
-    if AXIS_OF[d1] == 1:
-        return d2, d1
-    return d1, d2
+    """(look, up) for a wedge that chamfers a convex edge whose two exposed
+    faces point in directions ``d1``/``d2`` (int codes).
+
+    GAME RULE (plangenerator/lib/generator.lua): the wedge with (look, up)
+    chamfers the edge between its −look and +up faces. The generator puts
+    the y face (else the x face) in ``up`` and the other face, negated, in
+    ``look`` — e.g. the (+x,+y) edge is ``rgup`` = (look=−x, up=+y)."""
+    if AXIS_OF[d2] == 1 or (AXIS_OF[d1] != 1 and AXIS_OF[d2] == 0):
+        up, other = d2, d1
+    else:
+        up, other = d1, d2
+    return _OPP[other], up
 
 
 def bevel_corner_orient(d1: int, d2: int, d3: int):
-    """(look, up) for a corner block cutting the octant toward faces d1,d2,d3.
+    """(look, up) for a corner block whose three exposed faces are d1,d2,d3.
 
-    Our corner geometry removes the (+look,+up,+right) octant with
-    right = cross(up, look); pick the permutation whose right matches the 3rd face.
-    """
-    faces = (d1, d2, d3)
-    for i in range(3):
-        for j in range(3):
-            if i == j:
-                continue
-            k = 3 - i - j
-            look, up, third = faces[i], faces[j], faces[k]
-            _, _, R = frame(look, up)
-            if tuple(int(x) for x in R) == INT2VEC[third]:
-                return look, up
+    GAME RULE (generator.lua corners, all 8 verified): the cut octant is
+    (−look, +up, −right) with right = cross(up, look); the y face always
+    sits in ``up`` — e.g. topBackLeft (+x,+y,−z) is ``rgup``."""
+    faces = {AXIS_OF[d]: d for d in (d1, d2, d3)}
+    if len(faces) < 3:
+        return None
+    up = faces[1]
+    for cut_axis, third_axis in ((0, 2), (2, 0)):
+        look = _OPP[faces[cut_axis]]
+        _, _, R = frame(look, up)
+        if tuple(int(v) for v in R) == INT2VEC[_OPP[faces[third_axis]]]:
+            return look, up
     return None
 
 
@@ -114,8 +126,8 @@ SHAPE_TYPES = EDGE_TYPES | CORNER_TYPES
 
 
 # which (look,up)-plane corner the wedge slope cuts away, as (sign_look, sign_up).
-# Calibrated against arrow.xml.
-_EDGE_CUT = (1, 1)  # remove the (+look, +up) corner
+# GAME RULE from generator.lua: the wedge removes the (−look, +up) corner.
+_EDGE_CUT = (-1, 1)
 
 
 def edge_faces(lo, hi, look: int, up: int):
@@ -158,10 +170,11 @@ def corner_faces(lo, hi, look: int, up: int):
     L, U, R = frame(look, up)
     def P(sl, su, sr):
         return c + half * (sl * L + su * U + sr * R)
-    # keep the corner at (-L,-U,-R); slope face connects (+L,-U,-R),(-L,+U,-R),(-L,-U,+R)
-    o = P(-1, -1, -1)
-    a = P(+1, -1, -1)
-    b = P(-1, +1, -1)
-    d = P(-1, -1, +1)
+    # cut octant is (−L, +U, −R) per generator.lua, so the solid tetrahedron
+    # keeps the opposite corner (+L, −U, +R) and its three box neighbours
+    o = P(+1, -1, +1)
+    a = P(-1, -1, +1)
+    b = P(+1, +1, +1)
+    d = P(+1, -1, -1)
     faces = [[o, a, b], [o, a, d], [o, b, d], [a, b, d]]
     return faces
