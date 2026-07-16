@@ -5,12 +5,19 @@ selecting one of six axis directions). For full cubes the codes are always the
 default ``look=1, up=3``; for shape blocks (wedges/corners) they aim the slope.
 
 The integer->axis mapping was derived from the reference ships (default cube =
-look1/up3 => +z / +y); the wedge/corner slope semantics are taken VERBATIM from
-the game's own data/scripts/plangenerator/lib/generator.lua: a wedge with
-(look, up) chamfers the corner between its −look and +up faces, and a corner
-block cuts the (−look, +up, −right) octant. Emission (bevel_*_orient) and
-preview decoding (edge_faces/corner_faces) both live here so they can never
-drift apart.
+look1/up3 => +z / +y). The slope semantics are EMPIRICAL, taken from the
+game's own plans (ground truth, not scripts):
+
+* Edges — data/plans/arrow.xml: its arrowhead diagonals prove a wedge with
+  (look, up) chamfers the corner between its +look and +up faces, and the
+  encoding is symmetric under a look/up swap (the arrow uses both orders).
+* Corners — adjacency analysis over fighter/tutorialship/localship plans
+  (faces without neighbours = the cut octant) gives a UNANIMOUS
+  (look, up) -> cut-octant table; it is NOT expressible as fixed signs in
+  the (look, up, cross) frame, so it lives here as literal tables.
+
+Emission (bevel_*_orient) and preview decoding (edge_faces/corner_faces)
+both live here so they can never drift apart.
 """
 from __future__ import annotations
 
@@ -41,26 +48,41 @@ def frame(look: int, up: int):
 
 
 # ---- edge/corner orientation tables ------------------------------------------
-# VERIFIED against the game's own data/scripts/plangenerator/lib/generator.lua
-# (lines 161-190): a wedge with (look, up) chamfers the edge between its −look
-# and +up faces; the generator puts the y face (else the x face) in `up` and
-# the other exposed face, NEGATED, in `look`. Keys use the two outward faces.
+# EDGES, verified by re-rendering data/plans/arrow.xml (only cut(+look,+up)
+# reproduces the arrow; the lua-derived −look reading produced sawteeth
+# in game): the wedge chamfers the corner between its +look and +up faces,
+# order-insensitive. Keys use the two outward faces.
 EDGE_LOOKUP = {
-    # (Z edges) top/bottom running along Z, on +x/-x
-    ("+x", "+y"): (RG, UP),   # topLeft     -> rgup
-    ("-x", "+y"): (LF, UP),   # topRight    -> lfup
-    ("+x", "-y"): (RG, DN),   # bottomLeft  -> rgdn
-    ("-x", "-y"): (LF, DN),   # bottomRight -> lfdn
-    # (X edges) top/bottom running along X, on +z/-z
-    ("+z", "+y"): (BW, UP),   # topFront    -> bwup
-    ("-z", "+y"): (FW, UP),   # topBack     -> fwup
-    ("+z", "-y"): (BW, DN),   # bottomFront -> bwdn
-    ("-z", "-y"): (FW, DN),   # bottomBack  -> fwdn
-    # (Y edges) vertical, on +x/-x x +z/-z
-    ("+x", "+z"): (BW, LF),   # frontLeft   -> bwlf
-    ("-x", "+z"): (BW, RG),   # frontRight  -> bwrg
-    ("+x", "-z"): (FW, LF),   # backLeft    -> fwlf
-    ("-x", "-z"): (FW, RG),   # backRight   -> fwrg
+    ("+x", "+y"): (LF, UP), ("-x", "+y"): (RG, UP),
+    ("+x", "-y"): (LF, DN), ("-x", "-y"): (RG, DN),
+    ("+z", "+y"): (FW, UP), ("-z", "+y"): (BW, UP),
+    ("+z", "-y"): (FW, DN), ("-z", "-y"): (BW, DN),
+    ("+x", "+z"): (LF, FW), ("-x", "+z"): (RG, FW),
+    ("+x", "-z"): (LF, BW), ("-x", "-z"): (RG, BW),
+}
+
+# CORNERS: empirical, unanimous over ~700 corner blocks in the game's own
+# fighter/tutorialship/localship plans (exposed faces = the cut octant).
+# cut octant (sorted int codes) -> the game's canonical (look, up)...
+_CORNER_CUT_TO_LU = {
+    (1, 3, 4): (BW, RG),   # cut +x +y +z
+    (0, 3, 4): (BW, UP),   # cut +x +y -z
+    (1, 2, 4): (BW, DN),   # cut +x -y +z
+    (0, 2, 4): (BW, LF),   # cut +x -y -z
+    (1, 3, 5): (FW, UP),   # cut -x +y +z
+    (0, 3, 5): (FW, LF),   # cut -x +y -z
+    (1, 2, 5): (FW, RG),   # cut -x -y +z
+    (0, 2, 5): (FW, DN),   # cut -x -y -z
+}
+# ... and every (look, up) observed in those plans -> its cut octant, for
+# decoding foreign designs (reference turrets, workshop ships).
+_CORNER_LU_TO_CUT = {
+    (0, 2): (1, 2, 4), (0, 3): (0, 3, 4), (0, 4): (0, 2, 4), (0, 5): (1, 3, 4),
+    (1, 2): (0, 2, 5), (1, 3): (1, 3, 5), (1, 4): (0, 3, 5), (1, 5): (1, 2, 5),
+    (2, 1): (1, 3, 4), (2, 4): (0, 3, 4), (2, 5): (1, 3, 5),
+    (3, 0): (1, 2, 5),
+    (4, 0): (1, 3, 5), (4, 1): (1, 2, 4), (4, 2): (1, 2, 5), (4, 3): (1, 3, 4),
+    (5, 2): (0, 2, 4), (5, 3): (0, 3, 5),
 }
 
 CORNER_LOOKUP = {
@@ -82,40 +104,26 @@ def edge_orientation(face_a: str, face_b: str):
 AXIS_OF = {0: 2, 1: 2, 2: 1, 3: 1, 4: 0, 5: 0}  # int code -> axis (0=x,1=y,2=z)
 
 
-_OPP = {0: 1, 1: 0, 2: 3, 3: 2, 4: 5, 5: 4}
-
-
 def bevel_edge_orient(d1: int, d2: int) -> tuple[int, int]:
     """(look, up) for a wedge that chamfers a convex edge whose two exposed
     faces point in directions ``d1``/``d2`` (int codes).
 
-    GAME RULE (plangenerator/lib/generator.lua): the wedge with (look, up)
-    chamfers the edge between its −look and +up faces. The generator puts
-    the y face (else the x face) in ``up`` and the other face, negated, in
-    ``look`` — e.g. the (+x,+y) edge is ``rgup`` = (look=−x, up=+y)."""
-    if AXIS_OF[d2] == 1 or (AXIS_OF[d1] != 1 and AXIS_OF[d2] == 0):
-        up, other = d2, d1
-    else:
-        up, other = d1, d2
-    return _OPP[other], up
+    GAME RULE, proven by data/plans/arrow.xml (its head renders as a clean
+    arrow only this way): the wedge removes the (+look, +up) corner and the
+    encoding is symmetric under swapping look and up."""
+    # prefer the vertical (y) exposed face as `up`, like the game's plans
+    if AXIS_OF[d1] == 1:
+        return d2, d1
+    return d1, d2
 
 
 def bevel_corner_orient(d1: int, d2: int, d3: int):
     """(look, up) for a corner block whose three exposed faces are d1,d2,d3.
 
-    GAME RULE (generator.lua corners, all 8 verified): the cut octant is
-    (−look, +up, −right) with right = cross(up, look); the y face always
-    sits in ``up`` — e.g. topBackLeft (+x,+y,−z) is ``rgup``."""
-    faces = {AXIS_OF[d]: d for d in (d1, d2, d3)}
-    if len(faces) < 3:
-        return None
-    up = faces[1]
-    for cut_axis, third_axis in ((0, 2), (2, 0)):
-        look = _OPP[faces[cut_axis]]
-        _, _, R = frame(look, up)
-        if tuple(int(v) for v in R) == INT2VEC[_OPP[faces[third_axis]]]:
-            return look, up
-    return None
+    Empirical table from the game's own plans — the mapping is NOT a fixed
+    sign pattern in the (look, up, cross) frame, so no formula: just look
+    up the cut octant."""
+    return _CORNER_CUT_TO_LU.get(tuple(sorted((d1, d2, d3))))
 
 
 # ---- geometry for the preview (render shapes as real solids) -----------------
@@ -126,8 +134,8 @@ SHAPE_TYPES = EDGE_TYPES | CORNER_TYPES
 
 
 # which (look,up)-plane corner the wedge slope cuts away, as (sign_look, sign_up).
-# GAME RULE from generator.lua: the wedge removes the (−look, +up) corner.
-_EDGE_CUT = (-1, 1)
+# Proven by re-rendering data/plans/arrow.xml: remove the (+look, +up) corner.
+_EDGE_CUT = (1, 1)
 
 
 def edge_faces(lo, hi, look: int, up: int):
@@ -162,19 +170,28 @@ def edge_faces(lo, hi, look: int, up: int):
 
 
 def corner_faces(lo, hi, look: int, up: int):
-    """Tetrahedron-ish faces for a Corner block (approx: cut to a single vertex)."""
+    """Tetrahedron-ish faces for a Corner block (approx: cut to a single vertex).
+
+    The cut octant comes from the empirical plan-derived table; the solid
+    tetrahedron keeps the opposite box corner and its three neighbours."""
     lo = np.asarray(lo, float)
     hi = np.asarray(hi, float)
     c = (lo + hi) / 2.0
     half = (hi - lo) / 2.0
-    L, U, R = frame(look, up)
-    def P(sl, su, sr):
-        return c + half * (sl * L + su * U + sr * R)
-    # cut octant is (−L, +U, −R) per generator.lua, so the solid tetrahedron
-    # keeps the opposite corner (+L, −U, +R) and its three box neighbours
-    o = P(+1, -1, +1)
-    a = P(-1, -1, +1)
-    b = P(+1, +1, +1)
-    d = P(+1, -1, -1)
+    cut = _CORNER_LU_TO_CUT.get((look, up))
+    if cut is None:                      # unseen encoding: default octant
+        cut = (1, 3, 4)
+    sx = -1 if 4 in cut else 1           # keep = opposite of the cut octant
+    sy = -1 if 3 in cut else 1
+    sz = -1 if 1 in cut else 1
+
+    def P(ax, ay, az):
+        s = np.array([ax, ay, az], dtype=float)
+        return c + half * s
+
+    o = P(sx, sy, sz)
+    a = P(-sx, sy, sz)
+    b = P(sx, -sy, sz)
+    d = P(sx, sy, -sz)
     faces = [[o, a, b], [o, a, d], [o, b, d], [a, b, d]]
     return faces
