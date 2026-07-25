@@ -28,7 +28,10 @@ def _block_tag(b: Block) -> str:
 def to_xml(ship: ShipModel) -> str:
     """Return the full ship-plan XML document as a string (CRLF line endings)."""
     parents = build_parents(ship.blocks)
-    lines = [_HEADER, "<ship_design>", '\t<plan accumulateHealth="true" convex="false">']
+    lines = [_HEADER, "<ship_design>"]
+    for turret, block_index in ship.turret_designs:
+        lines.extend(_ship_turret_lines(turret, block_index))
+    lines.append('\t<plan accumulateHealth="true" convex="false">')
     for i, b in enumerate(ship.blocks):
         lines.append(f'\t\t<item parent="{parents[i]}" index="{i}">')
         lines.append(f"\t\t\t{_block_tag(b)}")
@@ -54,6 +57,27 @@ def _plan_lines(blocks, indent: str) -> list[str]:
         lines.append(f"{indent}\t\t{_block_tag(b)}")
         lines.append(f"{indent}\t</item>")
     lines.append(f"{indent}</plan>")
+    return lines
+
+
+def _ship_turret_lines(t, block_index: int) -> list[str]:
+    """Serialize an embedded game turret linked to a hull item index."""
+    lines = [
+        f'\t<turretDesign size="{fmt_num(t.size)}"'
+        f' coaxial="{"true" if t.coaxial else "false"}"'
+        f' shot_color="{t.shot_color}" blockIndex="{block_index}">',
+    ]
+    sections = (("base", t.base, (0.0, 0.0, 0.0)),
+                ("body", t.body, t.body_pivot),
+                ("barrel", t.barrel, t.barrel_pivot))
+    for tag, blocks, (px, py, pz) in sections:
+        lines.append(f'\t\t<{tag} px="{fmt_num(px)}" py="{fmt_num(py)}" pz="{fmt_num(pz)}">')
+        lines.extend(_plan_lines(blocks, "\t\t\t"))
+        lines.append(f"\t\t</{tag}>")
+    for mx, my, mz in t.muzzles:
+        lines.append(f'\t\t<muzzlePosition x="{fmt_num(mx)}" y="{fmt_num(my)}" z="{fmt_num(mz)}"/>')
+    lines.append('\t\t<version major="2" minor="0" patch="0"/>')
+    lines.append("\t</turretDesign>")
     return lines
 
 

@@ -6,7 +6,8 @@ references a block type Avorion already knows and will load.
 
 The *roles* (semantic names) are inferred from where each type sits in the
 sample ships (position, volume, colour, material) plus Avorion domain
-knowledge. They are used by the builder to decide what to place where; the
+knowledge. They are used by generators and previews to describe what is placed
+where; the
 exact functional balance of the resulting ship is not guaranteed (this is a
 *design* tool), but the geometry is valid and importable.
 """
@@ -43,8 +44,8 @@ class Role(str, Enum):
 # Role -> Avorion block *type* index. Verified against Greatheart's community
 # "Block IDs (Index) Mapped" sheet + the Boxelware forum + OBJ-converter source.
 # NOTE: every index below is a FULL-CUBE block. Shape variants (edges/corners/
-# wedges: Hull 100-103, Armour 104-106, Glow 151-154, ...) are intentionally NOT
-# used here — this builder emits axis-aligned boxes, and a shape block placed in a
+# wedges: Hull 100-103, Armour 104-107, Glow 151-154, ...) are intentionally NOT
+# used here — the generator emits axis-aligned boxes, and a shape block placed in a
 # full box would render as a wedge, not a cube. Add them only with orientation.
 ROLE_INDEX: dict[Role, int] = {
     Role.HULL: 1,
@@ -83,13 +84,15 @@ BLOCK_NAMES: dict[int, str] = {
     54: "Computer Core", 55: "Hyperspace Core", 61: "Light",
     100: "Hull Edge", 101: "Hull Corner", 102: "Hull Outer Corner", 103: "Hull Inner Corner",
     104: "Armour Edge", 105: "Armour Corner", 106: "Armour Outer Corner",
-    107: "Armour Inner Corner", 150: "Glow",
+    107: "Armour Inner Corner", 150: "Glow", 151: "Glow Edge", 152: "Glow Corner",
+    153: "Glow Outer Corner", 154: "Glow Inner Corner",
 }
 
 # All block-type indices seen in the reference ships — the "known-valid" set.
 KNOWN_INDICES: set[int] = {
     1, 2, 3, 5, 6, 7, 8, 9, 13, 14, 15, 19, 20, 22, 24, 25,
-    51, 52, 53, 61, 100, 101, 102, 103, 104, 105, 106, 113, 123, 124, 150,
+    51, 52, 53, 61, 100, 101, 102, 103, 104, 105, 106, 107, 113, 123, 124,
+    150, 151, 152, 153, 154,
 }
 
 # Material tiers (index -> name); higher = stronger/lighter in-game.
@@ -112,6 +115,13 @@ SHAPE_VARIANTS: dict[int, tuple[int, int]] = {
     1: (100, 101),    # Hull -> Hull Edge, Hull Corner
     8: (104, 105),    # Armour -> Armour Edge, Armour Corner
     150: (151, 152),  # Glow -> Glow Edge, Glow Corner
+}
+
+# Real auto-ships use all three corner solids in each material family.
+CORNER_VARIANTS: dict[int, tuple[int, int, int]] = {
+    1: (101, 102, 103),
+    8: (105, 106, 107),
+    150: (152, 153, 154),
 }
 
 

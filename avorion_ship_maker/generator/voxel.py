@@ -1,6 +1,6 @@
-"""Voxel scaffolding for the builder.
+"""Voxel scaffolding for the corpus-driven generator.
 
-The builder shapes a ship on an integer voxel grid (occupancy + a per-voxel role
+The generator shapes a ship on an integer voxel grid (occupancy + a per-voxel role
 label), then :func:`greedy_merge` collapses runs of identically-attributed voxels
 into as few axis-aligned boxes as possible so the exported ship has a sane block
 count instead of one block per voxel.

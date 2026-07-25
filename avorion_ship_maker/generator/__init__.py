@@ -1,6 +1,4 @@
-"""Procedural ship-generation subpackage."""
-from .spec import ShipSpec, HULL_CLASSES, STYLES
-from .builder import build_ship
-from .text_parser import parse_description
+"""Corpus-driven ship-generation subpackage."""
+from .auto_ship_generator import AutoShipSpec, generate_auto_ship
 
-__all__ = ["ShipSpec", "HULL_CLASSES", "STYLES", "build_ship", "parse_description"]
+__all__ = ["AutoShipSpec", "generate_auto_ship"]

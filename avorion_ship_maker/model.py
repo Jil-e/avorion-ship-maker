@@ -97,8 +97,9 @@ class ShipModel:
 
     blocks: list[Block] = field(default_factory=list)
     name: str = "Ship"
-    layout: str | None = None   # hull archetype the builder used (mono/twin/...)
+    layout: str | None = None   # geometry family used by the generator
     pitch: float | None = None  # effective block pitch in game units (0.25-grid)
+    turret_designs: list[tuple[object, int]] = field(default_factory=list)
 
     def add(self, block: Block) -> Block:
         self.blocks.append(block)
